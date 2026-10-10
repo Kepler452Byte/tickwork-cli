@@ -1,6 +1,7 @@
 """Windows kernel job confines descendants even when the original child exits."""
 
 import ctypes
+import sys
 from ctypes import wintypes
 from typing import Any
 
@@ -47,7 +48,12 @@ class ExtendedLimits(ctypes.Structure):
 
 
 class WindowsJob:
+    kernel: Any
+    handle: Any
+
     def __init__(self, pid: int) -> None:
+        if sys.platform != "win32":
+            raise TickworkError("unsupported-platform", "Process jobs require Windows")
         kernel: Any = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel = kernel
         kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]

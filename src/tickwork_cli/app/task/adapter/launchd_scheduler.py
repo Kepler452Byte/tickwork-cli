@@ -12,6 +12,8 @@ from tickwork_cli.common.process import command
 
 
 class LaunchdScheduler:
+    domain: str
+
     def __init__(self, home: Path) -> None:
         self.home = home
         self.prefix = namespace(home)
