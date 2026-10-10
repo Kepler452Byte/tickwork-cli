@@ -1,6 +1,7 @@
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ class LaunchdScheduler:
         self.home = home
         self.prefix = namespace(home)
         self.directory = Path.home() / "Library/LaunchAgents"
+        if sys.platform == "win32":
+            raise TickworkError("unsupported-platform", "launchd requires macOS")
         self.domain = f"gui/{os.getuid()}"
 
     def label(self, task_id: str) -> str:
@@ -47,8 +50,10 @@ class LaunchdScheduler:
         raise TickworkError("scheduler-failed", result.stderr.strip())
 
     def state(self, task_id: str) -> dict[str, Any]:
-        self.owned(task_id)
+        owned = self.owned(task_id)
         loaded = self.loaded(task_id)
+        if loaded and owned is None:
+            raise TickworkError("foreign-task", "Loaded launchd job has no owned plist")
         # Bootstrapped jobs in the GUI domain are authoritative, not a YAML enabled flag.
         return {
             "deployed": self.path(task_id).exists() or loaded,
@@ -57,7 +62,7 @@ class LaunchdScheduler:
         }
 
     def deploy(self, task: Task, enabled: bool) -> None:
-        self.owned(task.id)
+        self.state(task.id)
         if self.loaded(task.id):
             command(["launchctl", "bootout", f"{self.domain}/{self.label(task.id)}"])
         data: dict[str, Any] = {
@@ -86,7 +91,7 @@ class LaunchdScheduler:
             command(["launchctl", "bootstrap", self.domain, str(self.path(task.id))])
 
     def remove(self, task_id: str) -> None:
-        self.owned(task_id)
+        self.state(task_id)
         if self.loaded(task_id):
             command(["launchctl", "bootout", f"{self.domain}/{self.label(task_id)}"])
         command(["launchctl", "enable", f"{self.domain}/{self.label(task_id)}"])

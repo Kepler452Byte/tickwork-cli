@@ -12,12 +12,11 @@ from typing import IO, Any
 
 from tickwork_cli.app.task.repository.task_run_repository import LOG_LIMIT, TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
+from tickwork_cli.common.windows_job import WindowsJob
 
 
 def stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
+    if sys.platform == "win32":
         # /T kills descendants too; never interpolate user argv in a shell.
         subprocess.run(
             ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=15
@@ -25,7 +24,10 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         if process.poll() is None:
             process.kill()
     else:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def run_task(home: Path, task: Task) -> dict[str, Any]:
@@ -34,6 +36,7 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
     repository.start(run_id, task.id, os.getpid())
     started = time.monotonic()
     process: subprocess.Popen[bytes] | None = None
+    job: WindowsJob | None = None
     code: int | None = None
     status = "failed"
     truncated = False
@@ -60,6 +63,8 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
             start_new_session=os.name != "nt",
             creationflags=creationflags,
         )
+        if sys.platform == "win32":
+            job = WindowsJob(process.pid)
         assert process.stdout is not None and process.stderr is not None
         for stream, pipe in (("stdout", process.stdout), ("stderr", process.stderr)):
             threading.Thread(target=read, args=(stream, pipe), daemon=True).start()
@@ -72,7 +77,10 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
         while completed < 2:
             if time.monotonic() - started >= task.timeout and not timed_out:
                 timed_out = True
-                stop_process(process)
+                if job:
+                    job.terminate()
+                else:
+                    stop_process(process)
             try:
                 stream, data = chunks.get(timeout=0.1)
             except queue.Empty:
@@ -94,7 +102,10 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
         repository.append(run_id, "stderr", str(exc))
     except BaseException:
         if process:
-            stop_process(process)
+            if job:
+                job.terminate()
+            else:
+                stop_process(process)
         repository.finish(
             run_id,
             "interrupted",
@@ -103,6 +114,9 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
             truncated,
         )
         raise
+    finally:
+        if job:
+            job.close()
     repository.finish(run_id, status, code, time.monotonic() - started, truncated)
     result = repository.result(run_id)
     result["success_criterion"] = (

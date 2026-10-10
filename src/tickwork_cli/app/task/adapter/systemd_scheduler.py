@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -33,14 +34,15 @@ class SystemdScheduler:
         return f"{self.prefix}-{task_id}"
 
     def paths(self, task_id: str) -> tuple[Path, Path]:
-        return tuple(
-            self.directory / f"{self.name(task_id)}.{suffix}" for suffix in ("service", "timer")
-        )  # type: ignore[return-value]
+        return (
+            self.directory / f"{self.name(task_id)}.service",
+            self.directory / f"{self.name(task_id)}.timer",
+        )
 
     def owned(self, task_id: str) -> None:
         expected = "# " + marker(self.home, task_id)
         for path in self.paths(task_id):
-            if path.exists() and path.read_text(encoding="utf-8").splitlines()[0] != expected:
+            if path.exists() and not path.read_text(encoding="utf-8").startswith(expected + "\n"):
                 raise TickworkError("foreign-task", f"Refusing to modify unowned unit {path}")
 
     def state(self, task_id: str) -> dict[str, Any]:
@@ -52,10 +54,17 @@ class SystemdScheduler:
                 "--user",
                 "show",
                 name,
-                "--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,NextElapseUSecMonotonic",
+                "--property=FragmentPath,LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,NextElapseUSecMonotonic",
             ]
         )
         properties = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        fragment = properties.get("FragmentPath")
+        if fragment and not Path(fragment).read_text(encoding="utf-8").startswith(
+            "# " + marker(self.home, task_id) + "\n"
+        ):
+            raise TickworkError(
+                "foreign-task", "Loaded timer does not have matching Tickwork ownership"
+            )
         exists = properties.get("LoadState") != "not-found"
         active = properties.get("ActiveState") == "active"
         enabled = properties.get("UnitFileState") == "enabled"
@@ -106,6 +115,8 @@ class SystemdScheduler:
         # The service is not stopped: deleting a definition never kills an active run.
 
     def doctor(self) -> dict[str, Any]:
+        if sys.platform == "win32":
+            raise TickworkError("unsupported-platform", "systemd requires Linux")
         command(["systemctl", "--user", "show-environment"])
         result = subprocess.run(
             ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
