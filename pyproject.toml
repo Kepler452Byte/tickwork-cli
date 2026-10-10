@@ -1,0 +1,42 @@
+[project]
+name = "tickwork-cli"
+version = "0.1.0"
+description = "Local cross-platform scheduled task management CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["typer>=0.27.2,<0.28"]
+
+[project.scripts]
+tickwork = "tickwork_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tickwork_cli"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "mypy>=1.10,<2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/*_cli.py" = ["B008"]
+"src/tickwork_cli/main.py" = ["B008", "I001"]
+"src/tickwork_cli/application_container.py" = ["I001"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
