@@ -37,6 +37,10 @@ class JsonParser(argparse.ArgumentParser):
                     {
                         "names": action.option_strings or [action.dest],
                         "required": action.required,
+                        "type": "boolean"
+                        if action.nargs == 0
+                        else getattr(action.type, "__name__", "string"),
+                        "nargs": action.nargs,
                         "description": action.help,
                         "default": action.default,
                         "choices": action.choices,

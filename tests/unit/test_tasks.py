@@ -162,3 +162,43 @@ def test_duplicate_config_is_rejected(tmp_path: Path, task: Task) -> None:
     (tmp_path / "tasks.yaml").write_text(json.dumps({"tasks": [task.data(), task.data()]}))
     with pytest.raises(TickworkError, match="Duplicate"):
         TaskService(tmp_path, MemoryScheduler()).repository.read()
+
+
+def test_can_inspect_and_delete_after_executable_disappears(tmp_path: Path, task: Task) -> None:
+    executable = tmp_path / "ephemeral-executable"
+    executable.write_bytes(b"unused")
+    definition = Task(task.id, [str(executable)], task.cwd, task.schedule)
+    service = TaskService(tmp_path, MemoryScheduler())
+    apply(service, "create", definition)
+    executable.unlink()
+    assert service.show(task.id)["id"] == task.id
+    apply(service, "delete", None)
+    assert service.list() == []
+
+
+def test_comment_edit_invalidates_config_plan(tmp_path: Path, task: Task) -> None:
+    service = TaskService(tmp_path, MemoryScheduler())
+    apply(service, "create", task)
+    preview = service.change("pause", task.id, None, False, None)
+    config = tmp_path / "tasks.yaml"
+    config.write_text(config.read_text() + "\n# Concurrent user edit\n")
+    with pytest.raises(TickworkError, match="fresh preview"):
+        service.change("pause", task.id, None, True, preview["plan"])
+
+
+def test_timeout_cleans_descendants_after_parent_exits(tmp_path: Path, task: Task) -> None:
+    child = "import time; time.sleep(20)"
+    parent = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(0.2)"
+    definition = Task(task.id, [sys.executable, "-c", parent], task.cwd, task.schedule, 1)
+    service = TaskService(tmp_path, MemoryScheduler())
+    apply(service, "create", definition)
+    result = service.run(task.id, True)
+    assert result["status"] == "timeout" and result["duration"] < 5
+
+
+def test_unfinished_history_is_reconciled_on_next_start(tmp_path: Path) -> None:
+    repository = TaskRunRepository(tmp_path)
+    repository.start("interrupted", "example", 999)
+    repository.start("new", "example", 1000)
+    assert repository.result("interrupted")["status"] == "interrupted"
+    assert repository.result("new")["status"] == "running"

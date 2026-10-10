@@ -69,7 +69,9 @@ class TaskService:
                 "after": replacement.data() if action != "delete" and replacement else None,
                 "scheduler_before": state,
                 "enabled_after": enabled,
-                "config": [item.data() for item in tasks.values()],
+                "config": hashlib.sha256(self.repository.path.read_bytes()).hexdigest()
+                if self.repository.path.exists()
+                else "missing",
             }
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
             plan = {
@@ -97,7 +99,7 @@ class TaskService:
                     self.repository.write(tasks)
                 except Exception as exc:
                     try:
-                        if old:
+                        if old and state["deployed"]:
                             self.scheduler.deploy(old, bool(state["enabled"]))
                         else:
                             self.scheduler.remove(task_id)
