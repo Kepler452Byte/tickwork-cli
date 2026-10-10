@@ -5,6 +5,7 @@ from typing import Any
 
 from tickwork_cli.app.task.adapter.scheduler_protocol import Scheduler
 from tickwork_cli.app.task.repository.task_repository import TaskRepository
+from tickwork_cli.app.task.repository.task_run_repository import TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
 from tickwork_cli.app.task.service.task_runner import run_task
 from tickwork_cli.common.application_errors import TickworkError
@@ -12,9 +13,12 @@ from tickwork_cli.common.file_lock import FileLock
 
 
 class TaskService:
-    def __init__(self, home: Path, scheduler: Scheduler) -> None:
+    def __init__(
+        self, home: Path, scheduler: Scheduler, repository: TaskRepository, runs: TaskRunRepository
+    ) -> None:
         self.home = home
-        self.repository = TaskRepository(home)
+        self.repository = repository
+        self.runs = runs
         self.scheduler = scheduler
 
     def lock(self) -> FileLock:
@@ -125,6 +129,6 @@ class TaskService:
             lock = self.run_lock(task_id)
             lock.__enter__()
         try:
-            return run_task(self.home, task)
+            return run_task(task, self.runs)
         finally:
             lock.__exit__(None, None, None)

@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tickwork_cli.app.task.repository.task_run_repository import TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
 from tickwork_cli.app.task.service.task_service import TaskService
 from tickwork_cli.common.application_errors import TickworkError
@@ -77,7 +76,7 @@ def execute_task(args: argparse.Namespace, service: TaskService) -> dict[str, An
         if result.get("status") == "preview":
             return result
         return {"run": result}
-    repository = TaskRunRepository(service.home)
+    repository = service.runs
     if action in {"history", "logs"} and (
         not 1 <= args.limit <= 100 or (args.offset if action == "history" else args.after) < 0
     ):

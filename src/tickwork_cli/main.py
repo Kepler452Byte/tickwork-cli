@@ -12,7 +12,8 @@ from tickwork_cli.app.task.cli.task_cli import (
     mutation_options,
     register_task_commands,
 )
-from tickwork_cli.application_container import task_service
+from tickwork_cli.application_container import ApplicationContainer
+from tickwork_cli.application_settings import ApplicationSettings
 from tickwork_cli.common.application_errors import TickworkError
 from tickwork_cli.common.cli_output import write_result
 
@@ -99,6 +100,7 @@ def parser() -> JsonParser:
 
 
 def app() -> None:
+    container: ApplicationContainer | None = None
     try:
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):
@@ -111,7 +113,9 @@ def app() -> None:
         if args.command is None:
             print(root.format_help(), end="")
             return
-        home = args.home.expanduser().resolve()
+        container = ApplicationContainer(ApplicationSettings.load(args.home))
+        container.initialize()
+        home = container.settings.home
         if args.command == "agent":
             if args.agent_action != "install":
                 raise TickworkError("invalid-command", "Use agent --help")
@@ -123,9 +127,9 @@ def app() -> None:
                 args.expected_plan,
             )
         elif args.command == "doctor":
-            result = {"home": str(home), **task_service(home).scheduler.doctor()}
+            result = {"home": str(home), **container.scheduler.doctor()}
         else:
-            result = execute_task(args, task_service(home))
+            result = execute_task(args, container.task_service)
         status = str(result.pop("status", "ok"))
         write_result(result, status=status, error=status == "error")
         if status == "error":
@@ -144,6 +148,9 @@ def app() -> None:
             {"code": "interrupted", "message": "Execution interrupted"}, status="error", error=True
         )
         raise SystemExit(130) from None
+    finally:
+        if container is not None:
+            container.close()
 
 
 if __name__ == "__main__":

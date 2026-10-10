@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from tickwork_cli.application_container import task_service
+from tickwork_cli.application_container import ApplicationContainer
+from tickwork_cli.application_settings import ApplicationSettings
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_NATIVE_TEST") != "1", reason="requires real user scheduler"
@@ -100,11 +101,16 @@ def test_native_lifecycle_and_real_interval_trigger(tmp_path: Path) -> None:
         assert invoke(home, "task", "history")["runs"] == []
         mutate(home, "task", "delete", "native-probe")
         assert invoke(home, "task", "list")["tasks"] == []
-        assert not task_service(home).scheduler.state("native-probe")["deployed"]
+        assert not ApplicationContainer(ApplicationSettings.load(home)).scheduler.state(
+            "native-probe"
+        )["deployed"]
         evidence["result"] = "passed"
     finally:
-        service = task_service(home)
+        container = ApplicationContainer(ApplicationSettings.load(home))
+        container.initialize()
+        service = container.task_service
         service.scheduler.remove("native-probe")
+        container.close()
         output = Path(os.getenv("NATIVE_EVIDENCE_DIR", str(tmp_path)))
         output.mkdir(parents=True, exist_ok=True)
         (output / f"native-{sys.platform}.json").write_text(
