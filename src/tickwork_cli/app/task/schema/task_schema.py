@@ -27,16 +27,10 @@ class Task:
             raise TickworkError(
                 "invalid-task", "argv must be a nonempty string array without NUL/newline"
             )
-        if not Path(self.argv[0]).is_absolute() or not Path(self.argv[0]).is_file():
-            raise TickworkError(
-                "invalid-task", "argv[0] must be an absolute existing executable path"
-            )
-        if (
-            not isinstance(self.cwd, str)
-            or not Path(self.cwd).is_absolute()
-            or not Path(self.cwd).is_dir()
-        ):
-            raise TickworkError("invalid-task", "cwd must be an absolute existing directory")
+        if not Path(self.argv[0]).is_absolute():
+            raise TickworkError("invalid-task", "argv[0] must be an absolute executable path")
+        if not isinstance(self.cwd, str) or not Path(self.cwd).is_absolute():
+            raise TickworkError("invalid-task", "cwd must be an absolute directory")
         if type(self.timeout) is not int or not 1 <= self.timeout <= 86400:
             raise TickworkError("invalid-task", "timeout must be 1..86400 seconds")
         schedule = self.schedule

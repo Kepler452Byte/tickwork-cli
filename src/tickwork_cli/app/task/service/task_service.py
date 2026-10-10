@@ -43,6 +43,11 @@ class TaskService:
     def change(
         self, action: str, task_id: str, task: Task | None, confirm: bool, expected: str | None
     ) -> dict[str, Any]:
+        if task is not None and (not Path(task.argv[0]).is_file() or not Path(task.cwd).is_dir()):
+            raise TickworkError(
+                "invalid-task",
+                "Executable and working directory must exist when creating or updating",
+            )
         with self.lock():
             tasks = self.repository.read()
             old = tasks.get(task_id)

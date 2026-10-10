@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import NoReturn
@@ -95,6 +96,9 @@ def parser() -> JsonParser:
 
 def app() -> None:
     try:
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
         root = parser()
         args = root.parse_args()
         if args.version or args.command == "version":

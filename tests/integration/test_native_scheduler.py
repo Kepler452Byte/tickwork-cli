@@ -19,6 +19,7 @@ def invoke(home: Path, *arguments: str) -> dict[str, Any]:
     result = subprocess.run(
         [sys.executable, "-m", "tickwork_cli.main", "--home", str(home), *arguments],
         text=True,
+        encoding="utf-8",
         capture_output=True,
         timeout=30,
     )

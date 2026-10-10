@@ -56,6 +56,7 @@ def test_malformed_task_has_json_error(tmp_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert result.returncode != 0 and result.stdout == ""
     assert json.loads(result.stderr)["code"] == "invalid-task"

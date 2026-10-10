@@ -20,6 +20,7 @@ def test_wheel_installs_and_runs(tmp_path: Path) -> None:
     result = subprocess.run(
         [str(python), "-m", "tickwork_cli.main", "version"],
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
     )
