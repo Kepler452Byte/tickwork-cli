@@ -1,6 +1,6 @@
 [project]
 name = "tickwork-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local cross-platform scheduled task management CLI"
 readme = "README.md"
 license = "MIT"
@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 
 
 requires-python = ">=3.12"
-dependencies = ["PyYAML>=6,<7"]
+dependencies = ["PyYAML>=6,<7", "packaging>=24,<27", "pydantic-settings>=2,<3"]
 
 [project.urls]
 Repository = "https://github.com/Kepler452Byte/tickwork-cli"

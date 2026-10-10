@@ -37,7 +37,9 @@ class Task:
         if not isinstance(schedule, dict):
             raise TickworkError("invalid-task", "schedule must be an object")
         kind = schedule.get("kind")
-        if kind == "interval":
+        if kind == "manual":
+            valid = set(schedule) == {"kind"}
+        elif kind == "interval":
             seconds = schedule.get("seconds")
             valid = (
                 set(schedule) == {"kind", "seconds"}
@@ -61,7 +63,7 @@ class Task:
         if not valid:
             raise TickworkError(
                 "invalid-task",
-                "schedule: interval seconds (whole minutes 60..86400), daily HH:MM, or weekly day mon..sun HH:MM",
+                "schedule: manual, interval seconds (whole minutes 60..86400), daily HH:MM, or weekly day mon..sun HH:MM",
             )
 
     def data(self) -> dict[str, Any]:

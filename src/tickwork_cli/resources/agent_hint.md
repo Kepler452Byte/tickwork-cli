@@ -1,3 +1,3 @@
-### Tickwork local scheduled tasks
+### Tickwork local tasks
 
-Use the `tickwork-task-management` Skill for this device's native scheduled tasks. Discover commands and task fields with `tickwork --help` and `tickwork task --help`; all output is JSON. Preview writes, then apply the returned plan with explicit confirmation when authorized. Creating a task leaves it paused. A zero process exit code does not verify business artifacts. Never enable tasks on other devices or claim success without run evidence.
+Use `tickwork-task-management` for this device's scheduled or manual commands. Discover the JSON contract with `tickwork --help` and subcommand help. Preview configuration writes and apply the actual plan only when authorized. Manual tasks have no native deployment; new scheduled tasks stay paused. Follow returned `follow_up` entries according to their authorization requirements: creation is not execution permission, and testing never automatically resumes a schedule. Verify this run's result, logs and expected artifacts. Use `tickwork upgrade` to update the package and registered Agent resources without enabling tasks or deploying them on other devices.

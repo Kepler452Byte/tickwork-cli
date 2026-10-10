@@ -2,6 +2,8 @@ import sys
 from functools import cached_property
 
 from tickwork_cli.application_settings import ApplicationSettings
+from tickwork_cli.app.agent.service.agent_resource_service import AgentResourceService
+from tickwork_cli.app.upgrade.service.upgrade_service import UpgradeService
 from tickwork_cli.common.database.database_session import DatabaseSession
 from tickwork_cli.app.task.adapter.scheduler_protocol import Scheduler
 from tickwork_cli.app.task.adapter.launchd_scheduler import LaunchdScheduler
@@ -42,6 +44,14 @@ class ApplicationContainer:
             TaskRepository(self.settings.home),
             TaskRunRepository(self.database),
         )
+
+    @cached_property
+    def agent_service(self) -> AgentResourceService:
+        return AgentResourceService(self.settings.home)
+
+    @cached_property
+    def upgrade_service(self) -> UpgradeService:
+        return UpgradeService(self.settings.home, self.agent_service)
 
     def close(self) -> None:
         self.database.close()

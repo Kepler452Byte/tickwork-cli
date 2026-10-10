@@ -50,7 +50,7 @@ def register_task_commands(parser: argparse.ArgumentParser) -> None:
     logs.add_argument("run_id")
     logs.add_argument("--limit", type=int, default=20)
     logs.add_argument("--after", type=int, default=0)
-    parser.epilog = 'Task JSON: {"id":"example","argv":["/absolute/executable","arg"],"cwd":"/absolute/directory","schedule":{"kind":"interval","seconds":300},"timeout":3600}. Schedule alternatives: {"kind":"daily","time":"09:00"}, {"kind":"weekly","day":"mon","time":"09:00"}. All times are device local; intervals use whole minutes 60..86400 seconds.'
+    parser.epilog = 'Task JSON: {"id":"example","argv":["/absolute/executable","arg"],"cwd":"/absolute/directory","schedule":{"kind":"interval","seconds":300},"timeout":3600}. Schedule alternatives: {"kind":"manual"} (no native deployment), {"kind":"daily","time":"09:00"}, {"kind":"weekly","day":"mon","time":"09:00"}. All times are device local; intervals use whole minutes 60..86400 seconds.'
 
 
 def execute_task(args: argparse.Namespace, service: TaskService) -> dict[str, Any]:
@@ -61,35 +61,28 @@ def execute_task(args: argparse.Namespace, service: TaskService) -> dict[str, An
     if action in {"pause", "resume", "delete"}:
         return service.change(action, args.id, None, args.confirm, args.expected_plan)
     if action == "list":
-        return {"tasks": service.list()}
+        return {"tasks": service.list_tasks()}
     if action == "show":
         return {"task": service.show(args.id)}
     if action == "run":
         result = service.run(args.id, args.confirm, args.scheduled)
+        follow_up = service.run_follow_up(result["id"]) if "id" in result else []
         if result.get("status") in {"failed", "timeout", "interrupted"}:
             return {
                 "status": "error",
                 "code": "run-failed",
                 "message": "Task process did not succeed",
                 "run": result,
+                "follow_up": follow_up,
             }
         if result.get("status") == "preview":
             return result
-        return {"run": result}
-    repository = service.runs
-    if action in {"history", "logs"} and (
-        not 1 <= args.limit <= 100 or (args.offset if action == "history" else args.after) < 0
-    ):
-        raise TickworkError("invalid-page", "limit must be 1..100 and offset/cursor nonnegative")
+        return {"run": result, "follow_up": follow_up}
+    repository = service
     if action == "history":
         return {"runs": repository.history(args.task, args.limit, args.offset)}
     if action == "result":
         return {"run": repository.result(args.run_id)}
     if action == "logs":
-        chunks = repository.logs(args.run_id, args.limit, args.after)
-        return {
-            "chunks": chunks,
-            "next_cursor": chunks[-1]["seq"] if chunks else args.after,
-            "truncated": repository.result(args.run_id)["truncated"] == 1,
-        }
+        return service.logs(args.run_id, args.limit, args.after)
     raise TickworkError("invalid-command", "Use task --help to discover commands")

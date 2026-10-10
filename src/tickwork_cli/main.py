@@ -1,12 +1,10 @@
 import argparse
 import json
-import os
 import sys
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import NoReturn
 
-from tickwork_cli.app.agent.service.agent_resource_service import install_resources
 from tickwork_cli.app.task.cli.task_cli import (
     execute_task,
     mutation_options,
@@ -75,12 +73,16 @@ def parser() -> JsonParser:
     root.add_argument(
         "--home",
         type=Path,
-        default=Path(os.getenv("TICKWORK_HOME", str(Path.home() / ".tickwork"))),
+        default=None,
         help="Local state directory (default TICKWORK_HOME or ~/.tickwork)",
     )
     root.add_argument("--version", action="store_true", help="Report installed version as JSON")
     commands = root.add_subparsers(dest="command")
     commands.add_parser("version", description="Report installed package version")
+    upgrade = commands.add_parser(
+        "upgrade", description="Update package and registered Agent resources; preserve task state"
+    )
+    upgrade.add_argument("--skip-package", action="store_true", help=argparse.SUPPRESS)
     commands.add_parser(
         "doctor", description="Check native scheduler and user session; do not change host settings"
     )
@@ -119,13 +121,14 @@ def app() -> None:
         if args.command == "agent":
             if args.agent_action != "install":
                 raise TickworkError("invalid-command", "Use agent --help")
-            result = install_resources(
+            result = container.agent_service.install(
                 args.agents_file.expanduser().resolve(),
                 args.skills_dir.expanduser().resolve(),
-                home,
                 args.confirm,
                 args.expected_plan,
             )
+        elif args.command == "upgrade":
+            result = container.upgrade_service.upgrade(args.skip_package)
         elif args.command == "doctor":
             result = {"home": str(home), **container.scheduler.doctor()}
         else:
