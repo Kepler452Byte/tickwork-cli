@@ -109,3 +109,33 @@ def test_shell_updater_quotes_paths_and_waits_for_parent(tmp_path: Path) -> None
     )
     assert "Get-Process -Id 123" in windows
     assert "'tool '' 中文'" in windows and "if ($LASTEXITCODE -eq 0)" in windows
+
+
+def test_new_package_resources_replace_owned_copies_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+    from importlib.resources import files
+
+    from tickwork_cli.app.agent.service import agent_resource_service
+
+    resources = AgentResourceService(tmp_path / "home")
+    agents = tmp_path / "AGENTS.md"
+    skills = tmp_path / "skills"
+    agents.write_text("Unrelated header\n", encoding="utf-8")
+    preview = resources.install(agents, skills, False, None)
+    resources.install(agents, skills, True, preview["plan"])
+    agents.write_text(agents.read_text(encoding="utf-8") + "Unrelated tail\n", encoding="utf-8")
+    package = tmp_path / "new-package"
+    shutil.copytree(str(files("tickwork_cli") / "resources"), package / "resources")
+    new_skill = package / "resources/skills/tickwork-task-management/SKILL.md"
+    new_skill.write_text(
+        new_skill.read_text(encoding="utf-8") + "\nNew packaged instructions\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(agent_resource_service, "files", lambda name: package)
+    result = UpgradeService(resources.home, resources).upgrade(True)
+    assert result["resources"]["targets"][0]["status"] == "ok"
+    assert (skills / "tickwork-task-management/SKILL.md").read_bytes() == new_skill.read_bytes()
+    assert agents.read_text(encoding="utf-8").startswith("Unrelated header\n")
+    assert agents.read_text(encoding="utf-8").endswith("Unrelated tail\n")
+    assert not (resources.home / "tasks.yaml").exists()
