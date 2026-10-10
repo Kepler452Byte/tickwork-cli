@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 — unreleased
+## 0.2.1
 
 - Run newly registered Windows scheduled tasks through the same environment's pythonw.exe, avoiding a console window for the runner.
 - Suppress console windows for task and scheduler helper processes; keep captured logs and exit status when standard streams are absent. Task input is EOF for unattended execution.
