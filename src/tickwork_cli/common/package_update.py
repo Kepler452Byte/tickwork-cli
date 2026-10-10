@@ -60,7 +60,7 @@ def updater_script(update: list[str], align: list[str], pid: int, windows: bool)
         def command(argv: list[str]) -> str:
             return "& " + " ".join("'" + value.replace("'", "''") + "'" for value in argv)
 
-        return f"$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; {command(update)}; if ($LASTEXITCODE -eq 0) {{ {command(align)} }}; exit $LASTEXITCODE"
+        return f"$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $parent = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($null -ne $parent) {{ $parent.WaitForExit() }}; {command(update)}; if ($LASTEXITCODE -eq 0) {{ {command(align)} }}; exit $LASTEXITCODE"
     return f"while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; {shlex.join(update)} && {shlex.join(align)}"
 
 
@@ -79,7 +79,7 @@ def spawn_update(update: list[str], home: Path) -> Path:
     log = home / "upgrade.log"
     options: dict[str, Any] = {}
     if sys.platform == "win32":
-        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     else:
         options["start_new_session"] = True
     with log.open("w", encoding="utf-8") as output:
