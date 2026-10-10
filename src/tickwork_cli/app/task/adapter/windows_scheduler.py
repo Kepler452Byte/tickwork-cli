@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -107,6 +108,14 @@ try {{ $t=$s.GetFolder('\\').GetTask('{name}');
         actions = element(root, "Actions", Context="Author")
         action = element(actions, "Exec")
         argv = runner_argv(self.home, task.id)
+        # Keep the same environment/module search path without allocating a console.
+        executable = Path(sys.executable).with_name("pythonw.exe")
+        if not executable.is_file():
+            raise TickworkError(
+                "windowless-python-unavailable",
+                f"Windows scheduled tasks require {executable}; repair the Python installation",
+            )
+        argv[0] = str(executable)
         element(action, "Command", argv[0])
         element(action, "Arguments", subprocess.list2cmdline(argv[1:]))
         element(action, "WorkingDirectory", str(self.home))

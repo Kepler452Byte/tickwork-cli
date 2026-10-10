@@ -20,7 +20,7 @@ def main() -> None:
         subprocess.run([sys.executable, "-m", *command], cwd=ROOT, check=True)
     if args.release:
         subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "tests/smoke/test_installed_cli.py"],
+            [sys.executable, "-m", "pytest", "-q", "tests/smoke"],
             cwd=ROOT,
             check=True,
             env={**__import__("os").environ, "RUN_WHEEL_TEST": "1"},

@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.1 — unreleased
+
+- Run newly registered Windows scheduled tasks through the same environment's pythonw.exe, avoiding a console window for the runner.
+- Suppress console windows for task and scheduler helper processes; keep captured logs and exit status when standard streams are absent. Task input is EOF for unattended execution.
+- Document re-registering existing Windows tasks after upgrade while preserving enabled/paused state; missing pythonw.exe is a deployment error.
+
+## 0.2.0 — 2026-10-10
 
 - Add package/resource upgrade with explicit registered Agent destinations, detached update logs and preserved task state.
 - Add structured follow-up testing and per-run result/log commands without automatic execution.

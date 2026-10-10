@@ -48,7 +48,12 @@ def test_native_lifecycle_and_real_interval_trigger(tmp_path: Path) -> None:
                 "argv": [
                     sys.executable,
                     "-c",
-                    "import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps(sys.argv[2]),encoding='utf-8'); print('native-success')",
+                    "import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps(sys.argv[2]),encoding='utf-8'); print('native-success'); "
+                    + (
+                        "import ctypes; assert ctypes.windll.kernel32.GetConsoleWindow() == 0; print('console-window=0')"
+                        if sys.platform == "win32"
+                        else ""
+                    ),
                     str(artifact),
                     expected,
                 ],
@@ -69,6 +74,8 @@ def test_native_lifecycle_and_real_interval_trigger(tmp_path: Path) -> None:
         artifact.unlink()
         resumed = mutate(home, "task", "resume", "native-probe")
         assert resumed["scheduler"]["enabled"]
+        # Re-registering the same definition must preserve enabled state too.
+        assert mutate(home, "task", "update", "--file", str(spec))["scheduler"]["enabled"]
         deadline = time.monotonic() + 150
         while not artifact.exists() and time.monotonic() < deadline:
             time.sleep(1)
