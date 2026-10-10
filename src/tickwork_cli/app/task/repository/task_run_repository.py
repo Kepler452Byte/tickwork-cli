@@ -16,8 +16,13 @@ class TaskRunRepository:
 
     def start(self, run_id: str, task_id: str, pid: int) -> None:
         with connect(self.home) as db:
+            # The caller holds this task's OS run lock: prior unfinished rows cannot be active.
+            db.execute(
+                "UPDATE runs SET status='interrupted', finished=? WHERE task_id=? AND status='running'",
+                (datetime.now(UTC).isoformat(), task_id),
+            )
             cutoff = (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat()
-            db.execute("DELETE FROM runs WHERE finished IS NOT NULL AND started < ?", (cutoff,))
+            db.execute("DELETE FROM runs WHERE started < ?", (cutoff,))
             db.execute(
                 "DELETE FROM runs WHERE id IN (SELECT id FROM runs WHERE finished IS NOT NULL ORDER BY started DESC LIMIT -1 OFFSET ?)",
                 (MAX_RUNS - 1,),
