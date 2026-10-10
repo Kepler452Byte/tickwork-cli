@@ -7,7 +7,6 @@ import sys
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import IO, Any
 
 from tickwork_cli.app.task.repository.task_run_repository import LOG_LIMIT, TaskRunRepository
@@ -30,8 +29,7 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
             pass
 
 
-def run_task(home: Path, task: Task) -> dict[str, Any]:
-    repository = TaskRunRepository(home)
+def run_task(task: Task, repository: TaskRunRepository) -> dict[str, Any]:
     run_id = uuid.uuid4().hex
     repository.start(run_id, task.id, os.getpid())
     started = time.monotonic()
@@ -100,7 +98,7 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
         status = "timeout" if timed_out else "succeeded" if code == 0 else "failed"
     except OSError as exc:
         repository.append(run_id, "stderr", str(exc))
-    except BaseException:
+    except BaseException as exc:
         if process:
             if job:
                 job.terminate()
@@ -113,6 +111,8 @@ def run_task(home: Path, task: Task) -> dict[str, Any]:
             time.monotonic() - started,
             truncated,
         )
+        if isinstance(exc, KeyboardInterrupt):
+            return repository.result(run_id)
         raise
     finally:
         if job:

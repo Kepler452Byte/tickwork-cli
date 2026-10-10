@@ -13,9 +13,20 @@ uv tool install tickwork-cli
 tickwork --help
 tickwork task --help
 tickwork doctor
+tickwork upgrade
 ```
 
 Every public response, including help and errors, is one UTF-8 JSON object. Success and previews use stdout; errors use stderr and a nonzero exit code. Child output is captured separately in SQLite. No implicit shell is used.
+
+## Upgrade and follow-up actions
+
+`tickwork upgrade` updates supported uv tool/pipx installations through PyPI, then aligns registered Agent resources. It preserves task definitions and native enabled state. Offline or editable/unknown installations align resources only and report the skipped package update. A detached updater writes `~/.tickwork/upgrade.log`; check the final version and log before claiming success. `local.yaml` records destinations supplied through `agent install`; older installs without those destinations require one explicit registration, without automatic path discovery.
+
+Successful creation or execution-parameter updates return a `follow_up` run preview for the actual task. Execute only with user execution authorization; creation alone is insufficient. Run output returns result/log commands for the actual run, including failures. Follow-ups are guidance, never automatic execution or schedule activation.
+
+## Manual-only commands
+
+Use `"schedule": {"kind": "manual"}` to reuse a command, timeout and run history without native scheduling. The field remains required. Manual create/show/run/update/delete do not require a usable native scheduler; pause/resume report that scheduling is not applicable. Changing scheduled to manual removes owned deployment; changing back to a schedule starts paused. No once or cron expressions are introduced.
 
 ## Schedule a command
 

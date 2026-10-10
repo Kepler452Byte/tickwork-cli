@@ -1,16 +1,42 @@
+from __future__ import annotations
+
 import json
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tickwork_cli.app.agent.service.agent_resource_service import install_resources
-from tickwork_cli.app.task.repository.task_run_repository import TaskRunRepository
+from tickwork_cli.app.agent.service.agent_resource_service import AgentResourceService
+from tickwork_cli.app.task.repository.task_run_repository import RUN_SCHEMA, TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
 from tickwork_cli.app.task.service.task_service import TaskService
+from tickwork_cli.application_container import ApplicationContainer
+from tickwork_cli.application_settings import ApplicationSettings
 from tickwork_cli.common.application_errors import TickworkError
+from tickwork_cli.common.database.database_session import DatabaseSession
 from tickwork_cli.common.file_lock import FileLock
+
+
+@pytest.fixture
+def database(tmp_path: Path) -> Iterator[DatabaseSession]:
+    database = DatabaseSession(tmp_path / "tickwork.db")
+    database.initialize(RUN_SCHEMA)
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def make_service(request: pytest.FixtureRequest) -> Callable[[Path, MemoryScheduler], TaskService]:
+    def build(home: Path, scheduler: MemoryScheduler) -> TaskService:
+        container = ApplicationContainer(ApplicationSettings.load(home))
+        container.scheduler = scheduler
+        container.initialize()
+        request.addfinalizer(container.close)
+        return container.task_service
+
+    return build
 
 
 class MemoryScheduler:
@@ -44,9 +70,11 @@ def apply(
     return service.change(action, task_id, task, True, preview["plan"])
 
 
-def test_lifecycle_stale_plan_and_paused_update(tmp_path: Path, task: Task) -> None:
+def test_lifecycle_stale_plan_and_paused_update(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
     scheduler = MemoryScheduler()
-    service = TaskService(tmp_path, scheduler)
+    service = make_service(tmp_path, scheduler)
     preview = service.change("create", task.id, task, False, None)
     assert not (tmp_path / "tasks.yaml").exists()
     service.change("create", task.id, task, True, preview["plan"])
@@ -59,12 +87,14 @@ def test_lifecycle_stale_plan_and_paused_update(tmp_path: Path, task: Task) -> N
         service.change("resume", task.id, None, True, preview["plan"])
     apply(service, "pause", None)
     apply(service, "delete", None)
-    assert service.list() == []
+    assert service.list_tasks() == []
 
 
-def test_compensation_restores_existing_definition(tmp_path: Path, task: Task) -> None:
+def test_compensation_restores_existing_definition(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
     scheduler = MemoryScheduler()
-    service = TaskService(tmp_path, scheduler)
+    service = make_service(tmp_path, scheduler)
     apply(service, "create", task)
     scheduler.fail_once = True
     with pytest.raises(TickworkError, match="restored"):
@@ -73,8 +103,10 @@ def test_compensation_restores_existing_definition(tmp_path: Path, task: Task) -
     assert service.get(task.id) == task
 
 
-def test_busy_mutation_does_not_kill(tmp_path: Path, task: Task) -> None:
-    service = TaskService(tmp_path, MemoryScheduler())
+def test_busy_mutation_does_not_kill(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", task)
     with FileLock(tmp_path / ".locks/run-example.lock", blocking=False):
         with pytest.raises(TickworkError, match="lock"):
@@ -82,18 +114,19 @@ def test_busy_mutation_does_not_kill(tmp_path: Path, task: Task) -> None:
         assert service.get(task.id) == task
 
 
-def test_runner_success_failure_timeout_and_db_rebuild(tmp_path: Path, task: Task) -> None:
-    service = TaskService(tmp_path, MemoryScheduler())
+def test_runner_success_failure_timeout_and_db_rebuild(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", task)
     result = service.run(task.id, True)
     assert result["status"] == "succeeded"
-    assert TaskRunRepository(tmp_path).logs(result["id"], 20, 0)[0]["content"].splitlines() == [
-        "hello"
-    ]
+    assert service.runs.logs(result["id"], 20, 0)[0]["content"].splitlines() == ["hello"]
+    service.runs.database.close()
     for path in tmp_path.glob("tickwork.db*"):
         path.unlink()
     assert service.get(task.id) == task
-    assert TaskRunRepository(tmp_path).history(None, 20, 0) == []
+    assert service.runs.history(None, 20, 0) == []
     failure = Task(
         task.id,
         [sys.executable, "-c", "import sys; print('err',file=sys.stderr); sys.exit(7)"],
@@ -113,17 +146,20 @@ def test_runner_success_failure_timeout_and_db_rebuild(tmp_path: Path, task: Tas
 
 
 def test_log_cap_and_pagination(
-    tmp_path: Path, task: Task, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    task: Task,
+    monkeypatch: pytest.MonkeyPatch,
+    make_service: Callable[[Path, MemoryScheduler], TaskService],
 ) -> None:
     monkeypatch.setattr("tickwork_cli.app.task.service.task_runner.LOG_LIMIT", 100)
     noisy = Task(task.id, [sys.executable, "-c", "print('x'*20000)"], task.cwd, task.schedule, 5)
-    service = TaskService(tmp_path, MemoryScheduler())
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", noisy)
     result = service.run(task.id, True)
     assert result["truncated"] == 1
-    logs = TaskRunRepository(tmp_path).logs(result["id"], 100, 0)
+    logs = service.runs.logs(result["id"], 100, 0)
     assert sum(len(chunk["content"]) for chunk in logs) == 100
-    assert TaskRunRepository(tmp_path).logs(result["id"], 20, logs[-1]["seq"]) == []
+    assert service.runs.logs(result["id"], 20, logs[-1]["seq"]) == []
 
 
 @pytest.mark.parametrize(
@@ -144,40 +180,46 @@ def test_agent_resources_preserve_content_and_reject_edited_skill(tmp_path: Path
     agents = tmp_path / "AGENTS.md"
     agents.write_text("# Existing unrelated instructions\n", encoding="utf-8")
     skills = tmp_path / "skills"
-    preview = install_resources(agents, skills, tmp_path, False, None)
+    preview = AgentResourceService(tmp_path).install(agents, skills, False, None)
     assert agents.read_text() == "# Existing unrelated instructions\n"
-    install_resources(agents, skills, tmp_path, True, preview["plan"])
+    AgentResourceService(tmp_path).install(agents, skills, True, preview["plan"])
     assert agents.read_text().startswith("# Existing unrelated instructions\n")
     assert agents.read_text().count("<!-- TICKWORK:BEGIN -->") == 1
-    preview = install_resources(agents, skills, tmp_path, False, None)
-    install_resources(agents, skills, tmp_path, True, preview["plan"])
+    preview = AgentResourceService(tmp_path).install(agents, skills, False, None)
+    AgentResourceService(tmp_path).install(agents, skills, True, preview["plan"])
     skill = skills / "tickwork-task-management/SKILL.md"
     skill.write_text("Locally edited", encoding="utf-8")
     with pytest.raises(TickworkError, match="locally edited"):
-        install_resources(agents, skills, tmp_path, False, None)
+        AgentResourceService(tmp_path).install(agents, skills, False, None)
     assert not (tmp_path / "tasks.yaml").exists()
 
 
-def test_duplicate_config_is_rejected(tmp_path: Path, task: Task) -> None:
+def test_duplicate_config_is_rejected(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
     (tmp_path / "tasks.yaml").write_text(json.dumps({"tasks": [task.data(), task.data()]}))
     with pytest.raises(TickworkError, match="Duplicate"):
-        TaskService(tmp_path, MemoryScheduler()).repository.read()
+        make_service(tmp_path, MemoryScheduler()).repository.read()
 
 
-def test_can_inspect_and_delete_after_executable_disappears(tmp_path: Path, task: Task) -> None:
+def test_can_inspect_and_delete_after_executable_disappears(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
     executable = tmp_path / "ephemeral-executable"
     executable.write_bytes(b"unused")
     definition = Task(task.id, [str(executable)], task.cwd, task.schedule)
-    service = TaskService(tmp_path, MemoryScheduler())
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", definition)
     executable.unlink()
     assert service.show(task.id)["id"] == task.id
     apply(service, "delete", None)
-    assert service.list() == []
+    assert service.list_tasks() == []
 
 
-def test_comment_edit_invalidates_config_plan(tmp_path: Path, task: Task) -> None:
-    service = TaskService(tmp_path, MemoryScheduler())
+def test_comment_edit_invalidates_config_plan(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", task)
     preview = service.change("pause", task.id, None, False, None)
     config = tmp_path / "tasks.yaml"
@@ -186,18 +228,22 @@ def test_comment_edit_invalidates_config_plan(tmp_path: Path, task: Task) -> Non
         service.change("pause", task.id, None, True, preview["plan"])
 
 
-def test_timeout_cleans_descendants_after_parent_exits(tmp_path: Path, task: Task) -> None:
+def test_timeout_cleans_descendants_after_parent_exits(
+    tmp_path: Path, task: Task, make_service: Callable[[Path, MemoryScheduler], TaskService]
+) -> None:
     child = "import time; time.sleep(20)"
     parent = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(0.2)"
     definition = Task(task.id, [sys.executable, "-c", parent], task.cwd, task.schedule, 1)
-    service = TaskService(tmp_path, MemoryScheduler())
+    service = make_service(tmp_path, MemoryScheduler())
     apply(service, "create", definition)
     result = service.run(task.id, True)
     assert result["status"] == "timeout" and result["duration"] < 5
 
 
-def test_unfinished_history_is_reconciled_on_next_start(tmp_path: Path) -> None:
-    repository = TaskRunRepository(tmp_path)
+def test_unfinished_history_is_reconciled_on_next_start(
+    tmp_path: Path, database: DatabaseSession
+) -> None:
+    repository = TaskRunRepository(database)
     repository.start("interrupted", "example", 999)
     repository.start("new", "example", 1000)
     assert repository.result("interrupted")["status"] == "interrupted"

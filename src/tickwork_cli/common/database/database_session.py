@@ -4,28 +4,35 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-@contextmanager
-def connect(home: Path) -> Iterator[sqlite3.Connection]:
-    home.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(home / "tickwork.db", timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY, task_id TEXT NOT NULL, started TEXT NOT NULL,
-            finished TEXT, status TEXT NOT NULL, exit_code INTEGER,
-            duration REAL, truncated INTEGER NOT NULL DEFAULT 0, pid INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS runs_task ON runs(task_id, started);
-        CREATE TABLE IF NOT EXISTS logs (
-            seq INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-            stream TEXT NOT NULL, content TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS logs_run ON logs(run_id, seq);
-    """)
-    try:
-        with db:
-            yield db
-    finally:
-        db.close()
+class DatabaseSession:
+    """Own one lazy SQLite connection and its transaction lifecycle."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.connection: sqlite3.Connection | None = None
+        self.schema = ""
+
+    def initialize(self, schema: str) -> None:
+        self.schema = schema
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        if self.connection is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            db = sqlite3.connect(self.path, timeout=15)
+            try:
+                db.row_factory = sqlite3.Row
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA foreign_keys=ON")
+                db.executescript(self.schema)
+            except BaseException:
+                db.close()
+                raise
+            self.connection = db
+        with self.connection:
+            yield self.connection
+
+    def close(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None

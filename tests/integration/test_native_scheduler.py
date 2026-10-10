@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from tickwork_cli.application_container import task_service
+from tickwork_cli.application_container import ApplicationContainer
+from tickwork_cli.application_settings import ApplicationSettings
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_NATIVE_TEST") != "1", reason="requires real user scheduler"
@@ -100,13 +101,59 @@ def test_native_lifecycle_and_real_interval_trigger(tmp_path: Path) -> None:
         assert invoke(home, "task", "history")["runs"] == []
         mutate(home, "task", "delete", "native-probe")
         assert invoke(home, "task", "list")["tasks"] == []
-        assert not task_service(home).scheduler.state("native-probe")["deployed"]
+        assert not ApplicationContainer(ApplicationSettings.load(home)).scheduler.state(
+            "native-probe"
+        )["deployed"]
         evidence["result"] = "passed"
     finally:
-        service = task_service(home)
+        container = ApplicationContainer(ApplicationSettings.load(home))
+        container.initialize()
+        service = container.task_service
         service.scheduler.remove("native-probe")
+        container.close()
         output = Path(os.getenv("NATIVE_EVIDENCE_DIR", str(tmp_path)))
         output.mkdir(parents=True, exist_ok=True)
         (output / f"native-{sys.platform}.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+
+def test_native_manual_mode_handoff(tmp_path: Path) -> None:
+    home = tmp_path / "mode-home"
+    spec = tmp_path / "mode.json"
+    task_id = "manual-handoff"
+    data = {
+        "id": task_id,
+        "argv": [sys.executable, "-c", "print('manual-evidence')"],
+        "cwd": str(tmp_path),
+        "schedule": {"kind": "manual"},
+        "timeout": 5,
+    }
+    spec.write_text(json.dumps(data), encoding="utf-8")
+    container = ApplicationContainer(ApplicationSettings.load(home))
+    evidence: dict[str, Any] = {"platform": sys.platform}
+    try:
+        created = mutate(home, "task", "create", "--file", str(spec))
+        assert not created["scheduler"]["deployed"]
+        assert not container.scheduler.state(task_id)["deployed"]
+        assert invoke(home, "task", "run", task_id, "--confirm")["run"]["status"] == "succeeded"
+        data["schedule"] = {"kind": "interval", "seconds": 60}
+        spec.write_text(json.dumps(data), encoding="utf-8")
+        converted = mutate(home, "task", "update", "--file", str(spec))
+        assert converted["scheduler"]["deployed"] and not converted["scheduler"]["enabled"]
+        mutate(home, "task", "resume", task_id)
+        data["schedule"] = {"kind": "manual"}
+        spec.write_text(json.dumps(data), encoding="utf-8")
+        converted = mutate(home, "task", "update", "--file", str(spec))
+        assert not converted["scheduler"]["deployed"]
+        assert not container.scheduler.state(task_id)["deployed"]
+        assert invoke(home, "task", "run", task_id, "--confirm")["run"]["status"] == "succeeded"
+        mutate(home, "task", "delete", task_id)
+        assert invoke(home, "task", "list")["tasks"] == []
+        evidence["result"] = "passed"
+    finally:
+        container.scheduler.remove(task_id)
+        container.close()
+        output = Path(os.getenv("NATIVE_EVIDENCE_DIR", str(tmp_path)))
+        output.mkdir(parents=True, exist_ok=True)
+        (output / f"manual-{sys.platform}.json").write_text(json.dumps(evidence), encoding="utf-8")

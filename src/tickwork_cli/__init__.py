@@ -1,1 +1,1 @@
-"""Typer CLI MVC template."""
+"""Device-local task management with native scheduling and JSON output."""

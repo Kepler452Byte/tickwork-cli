@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+- Add package/resource upgrade with explicit registered Agent destinations, detached update logs and preserved task state.
+- Add structured follow-up testing and per-run result/log commands without automatic execution.
+- Add manual-only tasks without native deployment; scheduled/manual transitions preserve explicit activation requirements.
+- Align Settings, Container, repository injection and resource lifecycle with the MVC template; retain the SQLite implementation and JSON CLI.
+
 ## 0.1.0 — 2026-10-10
 
 - Manage device-local interval, daily and weekly commands through Linux systemd, macOS launchd and Windows Task Scheduler.
