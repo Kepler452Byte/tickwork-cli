@@ -87,7 +87,9 @@ def test_runner_success_failure_timeout_and_db_rebuild(tmp_path: Path, task: Tas
     apply(service, "create", task)
     result = service.run(task.id, True)
     assert result["status"] == "succeeded"
-    assert TaskRunRepository(tmp_path).logs(result["id"], 20, 0)[0]["content"] == "hello\n"
+    assert TaskRunRepository(tmp_path).logs(result["id"], 20, 0)[0]["content"].splitlines() == [
+        "hello"
+    ]
     for path in tmp_path.glob("tickwork.db*"):
         path.unlink()
     assert service.get(task.id) == task
