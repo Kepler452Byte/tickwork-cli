@@ -104,3 +104,33 @@ def test_mode_switches_and_failure_compensation(
 def test_manual_rejects_timing_fields(task: Task, schedule: dict[str, Any]) -> None:
     with pytest.raises(TickworkError):
         replace(task, schedule=schedule)
+
+
+def test_interrupted_run_keeps_diagnostic_follow_up(
+    tmp_path: Path, task: Task, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from argparse import Namespace
+
+    from tickwork_cli.app.task.cli.task_cli import execute_task
+    from tickwork_cli.app.task.service import task_runner
+
+    container = ApplicationContainer(ApplicationSettings.load(tmp_path))
+    container.scheduler = UnavailableScheduler()
+    container.initialize()
+    try:
+        service = container.task_service
+        apply(service, "create", replace(task, schedule={"kind": "manual"}))
+
+        def interrupted(*args: Any, **kwargs: Any) -> Any:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(task_runner.subprocess, "Popen", interrupted)
+        result = execute_task(
+            Namespace(action="run", id=task.id, confirm=True, scheduled=False), service
+        )
+        assert result["status"] == "error" and result["run"]["status"] == "interrupted"
+        assert service.result(result["run"]["id"])["status"] == "interrupted"
+        assert len(result["follow_up"]) == 2
+        assert all(step["argv"][-1] == result["run"]["id"] for step in result["follow_up"])
+    finally:
+        container.close()

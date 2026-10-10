@@ -98,7 +98,7 @@ def run_task(task: Task, repository: TaskRunRepository) -> dict[str, Any]:
         status = "timeout" if timed_out else "succeeded" if code == 0 else "failed"
     except OSError as exc:
         repository.append(run_id, "stderr", str(exc))
-    except BaseException:
+    except BaseException as exc:
         if process:
             if job:
                 job.terminate()
@@ -111,6 +111,8 @@ def run_task(task: Task, repository: TaskRunRepository) -> dict[str, Any]:
             time.monotonic() - started,
             truncated,
         )
+        if isinstance(exc, KeyboardInterrupt):
+            return repository.result(run_id)
         raise
     finally:
         if job:
