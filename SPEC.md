@@ -33,4 +33,4 @@ Agent CLI -> Agent resource service -> 托管 Hint/Skill 文件
 
 运行 `uv run python scripts/quality_check.py`；入口/打包变化加 `--release`。类型检查覆盖当前系统及必要的其他平台目标。三平台原生创建、实际触发、日/周规则注册、启停、更新、删除及数据库重建由 CI 留证。带凭据 AI CLI 必须单独实测，不能用假 CLI 声称已验证。
 
-GitHub 公开仓库和源码推送已获用户授权。PyPI 发布等待用户配置；不得提前上传或宣称已发布。
+v0.1.0 已按用户授权发布到 GitHub 与 PyPI。后续版本通过已配置的 Trusted Publisher 手动发布工作流执行；公开标签和已发布产物不可替换，实际上传成功后才能记录已发布。

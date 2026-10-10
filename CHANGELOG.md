@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — Unreleased
+## 0.1.0 — 2026-10-10
 
 - Manage device-local interval, daily and weekly commands through Linux systemd, macOS launchd and Windows Task Scheduler.
 - JSON discovery, previews and errors; paused creation, native enabled state, scoped ownership and stale-plan protection.
@@ -8,4 +8,4 @@
 - Durable YAML definitions with disposable SQLite; no legacy formats or migrations.
 - Packaged Agent Hint and task-management Skill, explicitly installed without activating tasks.
 
-PyPI publication awaits owner configuration. Native CI evidence does not imply authenticated AI command verification on every platform.
+Published on [PyPI](https://pypi.org/project/tickwork-cli/0.1.0/) and [GitHub](https://github.com/Kepler452Byte/tickwork-cli/releases/tag/v0.1.0). [Release workflow](https://github.com/Kepler452Byte/tickwork-cli/actions/runs/38038458653) verified native scheduling on all three platforms; actual PyPI distributions passed hash and isolated installation checks. Authenticated AI execution was tested on Linux, without claiming macOS/Windows credential verification.

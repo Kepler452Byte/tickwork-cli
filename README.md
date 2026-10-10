@@ -6,10 +6,10 @@ No daemon, web UI, remote management or AI-specific runtime. Commands, scripts a
 
 ## Install and discover
 
-Python 3.12+ is required. Until the initial PyPI publication, install from GitHub:
+Python 3.12+ is required. Install the published package from PyPI:
 
 ```sh
-uv tool install git+https://github.com/Kepler452Byte/tickwork-cli.git
+uv tool install tickwork-cli
 tickwork --help
 tickwork task --help
 tickwork doctor
@@ -75,4 +75,4 @@ uv run python scripts/quality_check.py --release
 RUN_NATIVE_TEST=1 uv run pytest -q tests/integration
 ```
 
-CI runs quality, isolated wheel installation, native deployment and actual timer execution on Linux, macOS and Windows. Native evidence is uploaded per platform. Authenticated AI command execution is a separate local check; CI does not store AI credentials. PyPI publication is pending owner Trusted Publisher configuration.
+CI runs quality, isolated wheel installation, native deployment and actual timer execution on Linux, macOS and Windows. Native evidence is uploaded per platform. Authenticated AI command execution is a separate local check; CI does not store AI credentials. [v0.1.0 is published on PyPI](https://pypi.org/project/tickwork-cli/0.1.0/). Releases use the configured Trusted Publisher workflow.
