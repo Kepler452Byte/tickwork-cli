@@ -1,0 +1,75 @@
+name: publish
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable annotated release tag (for example v0.1.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run python scripts/release_check.py
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+      - run: uv run python scripts/quality_check.py --release
+      - name: Start Linux user manager
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo systemctl start user@$(id -u).service
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - run: uv run pytest -q tests/integration
+        env:
+          RUN_NATIVE_TEST: '1'
+          NATIVE_EVIDENCE_DIR: native-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-native-${{ runner.os }}
+          path: native-evidence/
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run python scripts/release_check.py
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/*
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
