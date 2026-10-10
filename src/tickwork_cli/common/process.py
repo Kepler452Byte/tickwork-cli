@@ -1,7 +1,14 @@
 import subprocess
+import sys
 from pathlib import Path
 
 from tickwork_cli.common.application_errors import TickworkError
+
+
+def no_window_flags() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
 
 
 def command(argv: list[str], *, allowed_codes: tuple[int, ...] = (0,)) -> str:
@@ -18,6 +25,8 @@ def command(argv: list[str], *, allowed_codes: tuple[int, ...] = (0,)) -> str:
             text=True,
             encoding="utf-8" if powershell else None,
             timeout=30,
+            stdin=subprocess.DEVNULL,
+            creationflags=no_window_flags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise TickworkError("scheduler-unavailable", str(exc)) from exc

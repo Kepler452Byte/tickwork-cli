@@ -11,6 +11,7 @@ from typing import IO, Any
 
 from tickwork_cli.app.task.repository.task_run_repository import LOG_LIMIT, TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
+from tickwork_cli.common.process import no_window_flags
 from tickwork_cli.common.windows_job import WindowsJob
 
 
@@ -18,7 +19,11 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
     if sys.platform == "win32":
         # /T kills descendants too; never interpolate user argv in a shell.
         subprocess.run(
-            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=15
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+            creationflags=no_window_flags(),
         )
         if process.poll() is None:
             process.kill()
@@ -50,12 +55,13 @@ def run_task(task: Task, repository: TaskRunRepository) -> dict[str, Any]:
             chunks.put((stream, None))
 
     try:
-        creationflags = 0
+        creationflags = no_window_flags()
         if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
         process = subprocess.Popen(
             task.argv,
             cwd=task.cwd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=os.name != "nt",

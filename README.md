@@ -62,6 +62,28 @@ Intervals are native start-to-start, whole minutes 60..86400 seconds. Daily `{ "
 
 The user scheduler/session must be available. Tickwork does not enable Linux lingering, create privileged services or save Windows credentials. `doctor` exposes session conditions and native diagnostics. Only matching ownership markers are managed.
 
+## Windows background execution
+
+From v0.2.1, newly registered Windows tasks use `pythonw.exe` from the same Python environment, and console commands started by Tickwork run without a console window. That environment must include `pythonw.exe`; deployment reports an error if it is missing. Task stdin is closed (EOF); commands must run unattended. Output and exit status remain available through `task history`, `task result` and `task logs`. Applications that explicitly open their own GUI windows control those windows themselves.
+
+Package upgrade preserves existing Task Scheduler registrations. To apply the new entry point to an existing scheduled task, export its current definition with PowerShell and update it unchanged:
+
+```powershell
+$id = 'your-task-id'
+$shown = tickwork task show $id | ConvertFrom-Json
+$definition = $shown.task | Select-Object id, argv, cwd, schedule, timeout
+$file = Join-Path $env:TEMP "tickwork-$id.json"
+$json = $definition | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($file, $json, [System.Text.UTF8Encoding]::new($false))
+$preview = tickwork task update --file $file | ConvertFrom-Json
+# Inspect the definition, scheduler_before and enabled_after before confirming.
+tickwork task update --file $file --expected-plan $preview.plan --confirm
+tickwork task show $id
+Remove-Item $file
+```
+
+Use the same global `--home` on every command if your task uses a custom state directory. Update each scheduled task separately; updating preserves its existing enabled/paused state and rejects running tasks. Wait for the next trigger to verify the change. A paused task stays paused until explicitly resumed. Failures before a run is recorded are diagnosed through Task Scheduler's LastTaskResult and Operational log.
+
 ## Local data and Agent resources
 
 `~/.tickwork/` is the default; set `TICKWORK_HOME` or global `--home` to override. Back up `tasks.yaml`, the only durable task definitions. Native deployments are derived; actual enabled state comes from the scheduler. `tickwork.db` contains disposable run history and streamed stdout/stderr. `.locks/` contains OS-held runtime locks, independent of SQLite.
