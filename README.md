@@ -24,6 +24,8 @@ Every public response, including help and errors, is one UTF-8 JSON object. Succ
 
 A scheduled response is not completion. Query `tickwork agent upgrade-status <operation_id>` until `state` is `completed` or `failed`; package and resource stages are reported separately. Failure returns a nonzero exit code. Diagnostic logs are scoped to `~/.tickwork/upgrades/<operation_id>/updater.log`, without raw package-manager output. Upgrade preserves task definitions and native enabled state.
 
+When upgrading from v0.2.1, use the original package manager (`uv tool upgrade tickwork-cli` or `pipx upgrade tickwork-cli`), verify `tickwork version`, then preview `tickwork agent sync` and confirm its current plan. The previous updater does not confirm the new resource preview, so package installation alone does not establish resource alignment.
+
 `local.yaml` records explicitly supplied resource destinations and owned files. Existing registered locations and `.tickwork-owned.json` ownership records are retained and consolidated on confirmed sync. Installs without registration require explicit paths once; no directory discovery occurs.
 
 Successful creation or execution-parameter updates return a `follow_up` run preview for the actual task. Execute only with user execution authorization; creation alone is insufficient. Run output returns result/log commands for the actual run, including failures. Follow-ups are guidance, never automatic execution or schedule activation.
