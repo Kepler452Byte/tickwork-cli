@@ -16,7 +16,7 @@ Task intent -> discover only unknown CLI contract
 Configuration write -> preview -> authorized confirmation with actual plan
                     -> follow_up: test only with execution authorization
 Execution -> this run's result / logs -> expected artifact verification
-Upgrade -> package update -> registered Hint / Skill alignment -> verify version / upgrade.log
+Upgrade -> preview / confirmed package update -> registered resources -> upgrade-status / verification
 ```
 
 ## Steps
@@ -30,10 +30,12 @@ Upgrade -> package update -> registered Hint / Skill alignment -> verify version
 
 ## Upgrade and resource registration
 
-First resource registration uses `agent install` with verified absolute Hint and Skill paths. Preview and confirm according to authorization. The installer records destinations in this device's `local.yaml`, preserves unrelated Hint content, and rejects locally edited owned Skill files. Existing installs without registered destinations need explicit `agent install` once; do not scan or guess paths.
+First resource registration uses `agent install` with verified absolute Hint and Skill paths. Preview and confirm according to authorization. The installer records destinations in this device's `local.yaml`, preserves bytes outside the Hint block and user-added files. Registered Skill files and Hint blocks follow the package, so preview local-edit replacements before confirming. Existing installs without registered destinations need explicit `agent install` once; do not scan or guess paths.
 
-With upgrade authorization, run `tickwork upgrade`. Supported uv tool and pipx installations update through official PyPI in a detached process after the current CLI exits, then align resources using the new package. When `resources=deferred`, wait and inspect the returned `log_path`, package version, installed Skill and Hint; updater-spawned is not upgrade success. Offline, editable and unidentified installations report why package update was skipped and align registered resources only. Resource errors retain diagnostic evidence and do not imply all destinations were updated. Upgrade does not create, execute, enable or resume tasks; coordinate with running commands before replacing their environment. Do not call hidden internal upgrade flags as the ordinary user workflow.
+With upgrade authorization, preview `tickwork upgrade` and confirm the returned `expected_plan`. Supported uv tool and pipx installations update through official PyPI in a detached process after the current CLI exits, then align resources using the new package. Use the returned `operation_id` with `agent upgrade-status`; scheduled is not success. A completed result requires installed-version verification, resource alignment and zero pending operations. Failed results distinguish package/resource stages and return nonzero; inspect the operation's `log_path`. Editable or unidentified installations reject package-update confirmation; use public `upgrade --skip-package` for resource-only preview and confirmation. `agent sync` also previews registered resource alignment. Upgrade does not create, execute, enable or resume tasks; coordinate with running commands before replacing their environment.
 
 ## Storage
 
 Use `~/.tickwork`, `TICKWORK_HOME`, or explicit `--home`. Back up `tasks.yaml` and `local.yaml`; native enabled state remains owned by the scheduler. SQLite is disposable run history/logs. Stop running commands and close CLI processes before deleting it; no format migrations or history restoration are supported.
+
+Use history/result time-display options when local or IANA time is needed; original UTC fields stay unchanged. For retention and disk maintenance, discover `task cleanup --help` and `task compact --help`. Preview the exact task/age/status filters, protect failures when requested and confirm only the returned current plan. Completed history deletion cascades logs; compact separately with no running tasks. Defaults and environment overrides are documented in CLI help.

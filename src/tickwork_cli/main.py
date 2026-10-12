@@ -1,19 +1,22 @@
 import argparse
 import json
 import sys
-from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import NoReturn
 
 from tickwork_cli.app.task.cli.task_cli import (
     execute_task,
-    mutation_options,
     register_task_commands,
 )
 from tickwork_cli.application_container import ApplicationContainer
 from tickwork_cli.application_settings import ApplicationSettings
 from tickwork_cli.common.application_errors import TickworkError
 from tickwork_cli.common.cli_output import write_result
+from tickwork_cli.app.agent_resources.cli.agent_resource_cli import (
+    execute_agent,
+    register_agent_commands,
+)
+from tickwork_cli.app.system.cli.system_cli import execute_system, register_system_commands, version
 
 
 class JsonParser(argparse.ArgumentParser):
@@ -78,11 +81,7 @@ def parser() -> JsonParser:
     )
     root.add_argument("--version", action="store_true", help="Report installed version as JSON")
     commands = root.add_subparsers(dest="command")
-    commands.add_parser("version", description="Report installed package version")
-    upgrade = commands.add_parser(
-        "upgrade", description="Update package and registered Agent resources; preserve task state"
-    )
-    upgrade.add_argument("--skip-package", action="store_true", help=argparse.SUPPRESS)
+    register_system_commands(commands)
     commands.add_parser(
         "doctor", description="Check native scheduler and user session; do not change host settings"
     )
@@ -90,14 +89,7 @@ def parser() -> JsonParser:
         "task", description="Manage local task definitions, deployment, runs and logs"
     )
     register_task_commands(task)
-    agent = commands.add_parser("agent", description="Explicitly install packaged Agent resources")
-    sub = agent.add_subparsers(dest="agent_action")
-    install = sub.add_parser(
-        "install", description="Align owned Hint block and Skill; never enables tasks"
-    )
-    install.add_argument("--agents-file", type=Path, required=True)
-    install.add_argument("--skills-dir", type=Path, required=True)
-    mutation_options(install)
+    register_agent_commands(commands)
     return root
 
 
@@ -110,27 +102,19 @@ def app() -> None:
         root = parser()
         args = root.parse_args()
         if args.version or args.command == "version":
-            write_result({"version": installed_version("tickwork-cli")})
+            write_result(version())
             return
         if args.command is None:
             print(root.format_help(), end="")
             return
         container = ApplicationContainer(ApplicationSettings.load(args.home))
         container.initialize()
-        home = container.settings.home
-        if args.command == "agent":
-            if args.agent_action != "install":
-                raise TickworkError("invalid-command", "Use agent --help")
-            result = container.agent_service.install(
-                args.agents_file.expanduser().resolve(),
-                args.skills_dir.expanduser().resolve(),
-                args.confirm,
-                args.expected_plan,
-            )
+        if args.command in {"agent", "skill"}:
+            result = execute_agent(args, container)
         elif args.command == "upgrade":
-            result = container.upgrade_service.upgrade(args.skip_package)
+            result = execute_system(args, container)
         elif args.command == "doctor":
-            result = {"home": str(home), **container.scheduler.doctor()}
+            result = {"home": str(container.settings.home), **container.scheduler.doctor()}
         else:
             result = execute_task(args, container.task_service)
         status = str(result.pop("status", "ok"))
@@ -139,12 +123,19 @@ def app() -> None:
             raise SystemExit(1)
     except TickworkError as exc:
         write_result({"code": exc.code, "message": str(exc)}, status="error", error=True)
-        raise SystemExit(1) from None
+        raise SystemExit(getattr(exc, "exit_code", 1)) from None
     except (OSError, ValueError) as exc:
         write_result({"code": "invalid-input", "message": str(exc)}, status="error", error=True)
         raise SystemExit(1) from None
-    except Exception as exc:
-        write_result({"code": "operation-failed", "message": str(exc)}, status="error", error=True)
+    except Exception:
+        write_result(
+            {
+                "code": "operation-failed",
+                "message": "Unexpected failure; inspect local state and retry",
+            },
+            status="error",
+            error=True,
+        )
         raise SystemExit(1) from None
     except KeyboardInterrupt:
         write_result(

@@ -65,3 +65,25 @@ def test_wheel_installs_and_runs(tmp_path: Path) -> None:
     assert (tmp_path / "skills/tickwork-task-management/SKILL.md").exists()
     assert (tmp_path / "skills/tickwork-task-management/references/platform-notes.md").exists()
     assert not (tmp_path / "home/tasks.yaml").exists()
+
+    home = tmp_path / "home"
+    cli = [str(python), "-m", "tickwork_cli.main", "--home", str(home)]
+    for args in [
+        ["skill", "check"],
+        ["agent", "sync"],
+        ["upgrade", "--skip-package"],
+        ["task", "cleanup", "--older-than", "7", "--keep-failures"],
+    ]:
+        output = subprocess.run(
+            [*cli, *args], capture_output=True, text=True, encoding="utf-8", check=True
+        )
+        assert json.loads(output.stdout)["status"] in {"ok", "preview"}
+        assert output.stderr == ""
+    output = subprocess.run(
+        [*cli, "task", "history", "--timezone", "Asia/Shanghai"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    assert json.loads(output.stdout)["runs"] == []

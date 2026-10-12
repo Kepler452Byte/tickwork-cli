@@ -20,7 +20,11 @@ Every public response, including help and errors, is one UTF-8 JSON object. Succ
 
 ## Upgrade and follow-up actions
 
-`tickwork upgrade` updates supported uv tool/pipx installations through PyPI, then aligns registered Agent resources. It preserves task definitions and native enabled state. Offline or editable/unknown installations align resources only and report the skipped package update. A detached updater writes `~/.tickwork/upgrade.log`; check the final version and log before claiming success. `local.yaml` records destinations supplied through `agent install`; older installs without those destinations require one explicit registration, without automatic path discovery.
+`tickwork upgrade` previews supported uv tool/pipx package replacement and registered resource changes. Apply with `--expected-plan <expected_plan>` and `--confirm`. Editable or unknown installations report their channel and reject package-update confirmation; use public `--skip-package` to preview and confirm offline resource alignment. An external worker waits for this CLI to exit, verifies the installed package version, aligns resources through that package and checks for zero pending operations.
+
+A scheduled response is not completion. Query `tickwork agent upgrade-status <operation_id>` until `state` is `completed` or `failed`; package and resource stages are reported separately. Failure returns a nonzero exit code. Diagnostic logs are scoped to `~/.tickwork/upgrades/<operation_id>/updater.log`, without raw package-manager output. Upgrade preserves task definitions and native enabled state.
+
+`local.yaml` records explicitly supplied resource destinations and owned files. Existing registered locations and `.tickwork-owned.json` ownership records are retained and consolidated on confirmed sync. Installs without registration require explicit paths once; no directory discovery occurs.
 
 Successful creation or execution-parameter updates return a `follow_up` run preview for the actual task. Execute only with user execution authorization; creation alone is insufficient. Run output returns result/log commands for the actual run, including failures. Follow-ups are guidance, never automatic execution or schedule activation.
 
@@ -88,7 +92,25 @@ Use the same global `--home` on every command if your task uses a custom state d
 
 `~/.tickwork/` is the default; set `TICKWORK_HOME` or global `--home` to override. Back up `tasks.yaml`, the only durable task definitions. Native deployments are derived; actual enabled state comes from the scheduler. `tickwork.db` contains disposable run history and streamed stdout/stderr. `.locks/` contains OS-held runtime locks, independent of SQLite.
 
-Logs are capped at 10 MiB per run and expose truncation. Finished history retains up to 100 records and 30 days, pruned on new runs. Pagination uses offsets for history and sequence cursors for logs. Delete DB/WAL files only with no running tasks; definitions and native deployments persist, historical logs do not recover. No migration chain or legacy formats.
+Logs are capped at 10 MiB per run and expose truncation. Retention applies separately to each task: successful runs default to 7 days/100 records; failed, timed-out and interrupted runs default to 30 days/100 records, keeping at least the latest 10 failures. Count caps take priority over the minimum. Age means rolling 24-hour days since completion in UTC. Cleanup runs before and after execution, retaining the just-returned result until the next cleanup; a stopped task can be cleaned explicitly. Customize with `TICKWORK_SUCCESS_DAYS`, `TICKWORK_FAILURE_DAYS`, `TICKWORK_SUCCESS_LIMIT`, `TICKWORK_FAILURE_LIMIT` and `TICKWORK_FAILURE_KEEP`. The separate buckets prevent high-frequency successes from displacing failure diagnostics. At the 10 MiB log maximum, 200 retained runs can use about 2 GiB **per task**, so lower caps for noisy tasks.
+
+```sh
+# Preview deleting successes finished at least seven days ago, preserving failures:
+tickwork task cleanup --task vault-sync --older-than 7 --keep-failures
+tickwork task cleanup --task vault-sync --older-than 7 --keep-failures --expected-plan <plan> --confirm
+# Without --older-than, apply configured retention. --status is repeatable.
+tickwork task cleanup
+# Logical deletion cascades logs; reclaim file space separately when no tasks are running:
+tickwork task compact
+tickwork task compact --expected-plan <plan> --confirm
+# UTC originals remain unchanged; display_time adds offset-aware representations:
+tickwork task history --timezone Asia/Shanghai
+tickwork task result <run-id> --timezone local
+```
+
+An explicit `--older-than` overrides default age/minimum/count policy for the filtered records; use `--keep-failures` to preserve all failure classes. Running records are excluded. Confirmed cleanup marks orphan running records interrupted only after obtaining their task's OS lock; these are retained for a subsequent cleanup. Cleanup previews do not reconcile records. Compaction takes all task locks and rejects active runs; it does not run on each trigger. Both commands leave task definitions and scheduling unchanged.
+
+Pagination uses offsets for history and sequence cursors for logs. Default time display is UTC; `local` or an IANA zone affects only the added `display_time` field. Packaged tzdata supports Windows. Native schedules continue using device local time. Delete DB/WAL files only with no running tasks; definitions and native deployments persist, historical logs do not recover. No migration chain or legacy database formats.
 
 Install the packaged Hint and single Skill explicitly into chosen destinations:
 
@@ -97,7 +119,7 @@ tickwork agent install --agents-file /absolute/AGENTS.md --skills-dir /absolute/
 tickwork agent install --agents-file /absolute/AGENTS.md --skills-dir /absolute/skills --expected-plan <hash> --confirm
 ```
 
-This preserves unrelated instructions/files, rejects locally edited Skill files, and never creates or enables tasks.
+Registered files follow the package, including local edits inside owned Skill files and the Hint block. Preview those replacements before confirming. Bytes outside the Hint block and user-added files are preserved; package-removed owned files are cleaned. Unregistered conflicting files, malformed markers and changes after preview block writes. `--hint-file` also accepts the Hint path; `--agents-file` remains an alias. Hint and Skill targets can be installed independently. `agent sync` previews alignment of all registered targets; repeated confirmed sync is a zero-write operation. Resource commands never create or enable tasks.
 
 ## Development and verification
 

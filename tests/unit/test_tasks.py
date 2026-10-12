@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
-from tickwork_cli.app.agent.service.agent_resource_service import AgentResourceService
+from tickwork_cli.app.agent_resources.repository.agent_resource_repository import (
+    AgentResourceRepository,
+)
+from tickwork_cli.app.agent_resources.service.agent_resource_service import AgentResourceService
 from tickwork_cli.app.task.repository.task_run_repository import RUN_SCHEMA, TaskRunRepository
 from tickwork_cli.app.task.schema.task_schema import Task
 from tickwork_cli.app.task.service.task_service import TaskService
@@ -176,21 +179,33 @@ def test_invalid_schedule(task: Task, schedule: dict[str, Any]) -> None:
         Task(task.id, task.argv, task.cwd, schedule)
 
 
-def test_agent_resources_preserve_content_and_reject_edited_skill(tmp_path: Path) -> None:
+def test_agent_resources_preserve_content_and_align_registered_skill(tmp_path: Path) -> None:
     agents = tmp_path / "AGENTS.md"
     agents.write_text("# Existing unrelated instructions\n", encoding="utf-8")
     skills = tmp_path / "skills"
-    preview = AgentResourceService(tmp_path).install(agents, skills, False, None)
+    preview = AgentResourceService(
+        AgentResourceRepository("tickwork-cli", "tickwork", tmp_path / "state")
+    ).install(skills, agents, False, None)
     assert agents.read_text() == "# Existing unrelated instructions\n"
-    AgentResourceService(tmp_path).install(agents, skills, True, preview["plan"])
+    AgentResourceService(
+        AgentResourceRepository("tickwork-cli", "tickwork", tmp_path / "state")
+    ).install(skills, agents, True, preview["plan"])
     assert agents.read_text().startswith("# Existing unrelated instructions\n")
     assert agents.read_text().count("<!-- TICKWORK:BEGIN -->") == 1
-    preview = AgentResourceService(tmp_path).install(agents, skills, False, None)
-    AgentResourceService(tmp_path).install(agents, skills, True, preview["plan"])
+    preview = AgentResourceService(
+        AgentResourceRepository("tickwork-cli", "tickwork", tmp_path / "state")
+    ).install(skills, agents, False, None)
+    AgentResourceService(
+        AgentResourceRepository("tickwork-cli", "tickwork", tmp_path / "state")
+    ).install(skills, agents, True, preview["plan"])
     skill = skills / "tickwork-task-management/SKILL.md"
     skill.write_text("Locally edited", encoding="utf-8")
-    with pytest.raises(TickworkError, match="locally edited"):
-        AgentResourceService(tmp_path).install(agents, skills, False, None)
+    resources = AgentResourceService(
+        AgentResourceRepository("tickwork-cli", "tickwork", tmp_path / "state")
+    )
+    preview = resources.install(skills, agents)
+    resources.install(skills, agents, True, preview["plan"])
+    assert skill.read_text() != "Locally edited"
     assert not (tmp_path / "tasks.yaml").exists()
 
 
