@@ -20,7 +20,19 @@ def save(path: Path, job: dict[str, Any]) -> None:
             json.dump(job, handle, ensure_ascii=False)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(filename, path)
+        for attempt in range(21):
+            try:
+                os.replace(filename, path)
+                break
+            except PermissionError as exc:
+                # Windows status readers/scanners can briefly deny replacement of an open file.
+                if (
+                    sys.platform != "win32"
+                    or getattr(exc, "winerror", None) not in {5, 32, 33}
+                    or attempt == 20
+                ):
+                    raise
+                time.sleep(0.05)
     finally:
         Path(filename).unlink(missing_ok=True)
 

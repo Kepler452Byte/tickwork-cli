@@ -234,3 +234,77 @@ def test_post_alignment_pending_changes_are_failure(tmp_path, monkeypatch):
     result = json.loads(path.read_text())
     assert result["state"] == "failed"
     assert result["package_stage"] == "completed" and result["resource_stage"] == "failed"
+
+
+def test_windows_job_replace_retries_reader_sharing_violation(tmp_path, monkeypatch):
+    path = tmp_path / "result.json"
+    path.write_text('{"state":"scheduled"}')
+    replace = package_update_worker.os.replace
+    attempts = 0
+
+    def sharing_violation(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            error = PermissionError("File is held by status reader")
+            error.winerror = 32
+            assert json.loads(path.read_text())["state"] == "scheduled"
+            raise error
+        replace(source, target)
+
+    monkeypatch.setattr(package_update_worker.sys, "platform", "win32")
+    monkeypatch.setattr(package_update_worker.os, "replace", sharing_violation)
+    monkeypatch.setattr(package_update_worker.time, "sleep", lambda seconds: None)
+    package_update_worker.save(path, {"state": "completed"})
+    assert attempts == 3
+    assert json.loads(path.read_text())["state"] == "completed"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_job_replace_does_not_hide_permanent_permission_failure(tmp_path, monkeypatch):
+    path = tmp_path / "result.json"
+    attempts = 0
+
+    def denied(source, target):
+        nonlocal attempts
+        attempts += 1
+        error = PermissionError("Denied")
+        error.winerror = 32
+        raise error
+
+    monkeypatch.setattr(package_update_worker.sys, "platform", "win32")
+    monkeypatch.setattr(package_update_worker.os, "replace", denied)
+    monkeypatch.setattr(package_update_worker.time, "sleep", lambda seconds: None)
+    with pytest.raises(PermissionError):
+        package_update_worker.save(path, {"state": "completed"})
+    assert attempts == 21
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file-sharing semantics")
+def test_windows_open_result_reader_does_not_fail_writer(tmp_path):
+    import threading
+    import time
+
+    path = tmp_path / "result.json"
+    path.write_text('{"state":"scheduled"}')
+    started = threading.Event()
+    failures = []
+
+    def write():
+        started.set()
+        try:
+            package_update_worker.save(path, {"state": "completed"})
+        except Exception as exc:
+            failures.append(exc)
+
+    with path.open("rb") as reader:
+        writer = threading.Thread(target=write)
+        writer.start()
+        assert started.wait(1)
+        time.sleep(0.1)
+        assert writer.is_alive()  # The OS denies replacement while the reader is open.
+        assert reader.read() == b'{"state":"scheduled"}'
+    writer.join(3)
+    assert not writer.is_alive() and not failures
+    assert json.loads(path.read_text())["state"] == "completed"
