@@ -1,25 +1,36 @@
 import hashlib
 import json
+from contextlib import ExitStack
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from tickwork_cli.app.task.adapter.scheduler_protocol import Scheduler
 from tickwork_cli.app.task.repository.task_repository import TaskRepository
 from tickwork_cli.app.task.repository.task_run_repository import TaskRunRepository
+from tickwork_cli.app.task.schema.retention_schema import RetentionPolicy
 from tickwork_cli.app.task.schema.task_schema import Task
 from tickwork_cli.app.task.service.task_runner import run_task
 from tickwork_cli.common.application_errors import TickworkError
 from tickwork_cli.common.file_lock import FileLock
+from tickwork_cli.common.time_display import display_run
 
 
 class TaskService:
     def __init__(
-        self, home: Path, scheduler: Scheduler, repository: TaskRepository, runs: TaskRunRepository
+        self,
+        home: Path,
+        scheduler: Scheduler,
+        repository: TaskRepository,
+        runs: TaskRunRepository,
+        policy: RetentionPolicy | None = None,
     ) -> None:
         self.home = home
         self.repository = repository
         self.runs = runs
         self.scheduler = scheduler
+        self.policy = policy or RetentionPolicy()
 
     def lock(self) -> FileLock:
         return FileLock(self.home / ".locks/config.lock")
@@ -175,16 +186,25 @@ class TaskService:
             lock = self.run_lock(task_id)
             lock.__enter__()
         try:
-            return run_task(task, self.runs)
+            self.runs.delete_completed(self.policy.select(self.runs.completed(), datetime.now(UTC)))
+            result = run_task(task, self.runs)
+            expired = self.policy.select(self.runs.completed(), datetime.now(UTC))
+            # Keep the just-returned result available even with an explicit zero-day policy.
+            self.runs.delete_completed([run for run in expired if run != result["id"]])
+            return result
         finally:
             lock.__exit__(None, None, None)
 
-    def history(self, task_id: str | None, limit: int, offset: int) -> list[dict[str, Any]]:
+    def history(
+        self, task_id: str | None, limit: int, offset: int, timezone: str = "UTC"
+    ) -> list[dict[str, Any]]:
         self.validate_page(limit, offset)
-        return self.runs.history(task_id, limit, offset)
+        display_run({}, timezone)
+        return [display_run(run, timezone) for run in self.runs.history(task_id, limit, offset)]
 
-    def result(self, run_id: str) -> dict[str, Any]:
-        return self.runs.result(run_id)
+    def result(self, run_id: str, timezone: str = "UTC") -> dict[str, Any]:
+        display_run({}, timezone)
+        return display_run(self.runs.result(run_id), timezone)
 
     def logs(self, run_id: str, limit: int, after: int) -> dict[str, Any]:
         self.validate_page(limit, after)
@@ -211,3 +231,104 @@ class TaskService:
             }
             for action in ("result", "logs")
         ]
+
+    def cleanup(
+        self,
+        task_id: str | None,
+        older_than: int | None,
+        statuses: list[str] | None,
+        keep_failures: bool,
+        confirm: bool,
+        expected: str | None,
+    ) -> dict[str, Any]:
+        if older_than is not None and older_than < 0:
+            raise TickworkError(
+                "invalid-retention", "older-than must be nonnegative rolling 24-hour days"
+            )
+        with self.lock():
+            rows = self.runs.completed()
+            filters = {
+                "task": task_id,
+                "older_than": older_than,
+                "statuses": statuses,
+                "keep_failures": keep_failures,
+            }
+            ids = self.policy.select(
+                rows,
+                datetime.now(UTC),
+                task_id=task_id,
+                statuses=set(statuses) if statuses else None,
+                older_than=older_than,
+                keep_failures=keep_failures,
+            )
+            plan = hashlib.sha256(
+                json.dumps(
+                    {"rows": rows, "ids": ids, "filters": filters, "policy": asdict(self.policy)},
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            result = {
+                "status": "preview",
+                "plan": plan,
+                "filters": filters,
+                "policy": asdict(self.policy),
+                "delete_count": len(ids),
+                "running_excluded": True,
+                "reconciled_count": 0,
+                "write_performed": False,
+            }
+            if confirm:
+                if expected != plan:
+                    raise TickworkError(
+                        "stale-plan", "History or cleanup policy changed; preview again"
+                    )
+                # Reconcile only after plan approval and under the execution lock.
+                reconciled = 0
+                for task in self.runs.running_tasks():
+                    if task_id is not None and task != task_id:
+                        continue
+                    if statuses is not None and "interrupted" not in statuses:
+                        continue
+                    try:
+                        with self.run_lock(task):
+                            reconciled += self.runs.reconcile(task)
+                    except TickworkError as exc:
+                        if exc.code != "busy":
+                            raise
+                deleted = self.runs.delete_completed(ids)
+                result.update(
+                    status="ok",
+                    delete_count=deleted,
+                    reconciled_count=reconciled,
+                    write_performed=bool(deleted or reconciled),
+                )
+            return result
+
+    def compact(self, confirm: bool, expected: str | None) -> dict[str, Any]:
+        with self.lock(), ExitStack() as stack:
+            tasks = sorted(set(self.repository.read()) | set(self.runs.running_tasks()))
+            for task in tasks:
+                stack.enter_context(self.run_lock(task))
+            path = self.runs.database.path
+            stats = {
+                str(file): {"size": file.stat().st_size, "modified": file.stat().st_mtime_ns}
+                for file in path.parent.glob("tickwork.db*")
+            }
+            plan = self.runs.compaction_state()
+            result = {
+                "status": "preview",
+                "plan": plan,
+                "bytes_before": sum(item["size"] for item in stats.values()),
+                "write_performed": False,
+            }
+            if confirm:
+                if expected != plan:
+                    raise TickworkError("stale-plan", "Database changed; preview compaction again")
+                if path.exists():
+                    self.runs.compact()
+                result.update(
+                    status="ok",
+                    write_performed=path.exists(),
+                    bytes_after=path.stat().st_size if path.exists() else 0,
+                )
+            return result

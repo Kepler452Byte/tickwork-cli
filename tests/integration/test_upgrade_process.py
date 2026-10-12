@@ -5,43 +5,57 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 
-def test_detached_update_waits_then_aligns_resources(tmp_path: Path) -> None:
+from tickwork_cli.common.package_updater import PackageUpdater
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_detached_update_waits_then_verifies_resources(tmp_path: Path, exit_code: int) -> None:
     home = tmp_path / "upgrade home 中文 & ' $"
     artifact = tmp_path / "package ' $ result.json"
-    launcher = """import sys,time
+    entry = Path(sys.executable).parent / ("tickwork.exe" if os.name == "nt" else "tickwork")
+    launcher = """import json,sys,time
 from pathlib import Path
-from tickwork_cli.common.package_update import spawn_update
+from tickwork_cli.common.package_updater import PackageUpdater
 home=Path(sys.argv[1]); artifact=Path(sys.argv[2])
-update=[sys.executable,'-c',"import sys;from pathlib import Path;Path(sys.argv[1]).write_text('updated')",str(artifact)]
-spawn_update(update,home)
+update=[sys.executable,'-c',"import ctypes,sys;from pathlib import Path; console=ctypes.windll.kernel32.GetConsoleWindow() if sys.platform=='win32' else 0;assert not console;Path(sys.argv[1]).write_text('updated');raise SystemExit(int(sys.argv[2]))",str(artifact),sys.argv[4]]
+result=PackageUpdater('tickwork-cli','tickwork',home).start({'current_version':'0.2.2','update_command':update,'entry_point':sys.argv[3]},'test-plan')
+print(json.dumps(result))
 time.sleep(1)
 assert not artifact.exists(), 'Updater ran before CLI exited'
 """
-    result = subprocess.run(
-        [sys.executable, "-c", launcher, str(home), str(artifact)],
+    host = subprocess.run(
+        [sys.executable, "-c", launcher, str(home), str(artifact), str(entry), str(exit_code)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=15,
     )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "" and result.stderr == ""
-    log = home / "upgrade.log"
+    assert host.returncode == 0, host.stderr
+    assert host.stderr == ""
+    scheduled = json.loads(host.stdout)
+    assert scheduled["state"] == "scheduled"
+    updater = PackageUpdater("tickwork-cli", "tickwork", home)
     deadline = time.monotonic() + 30
-    payload = None
     while time.monotonic() < deadline:
-        try:
-            payload = json.loads(log.read_text(encoding="utf-8-sig"))
+        payload = updater.status(scheduled["operation_id"])
+        if payload["state"] in {"completed", "failed"}:
             break
-        except (OSError, ValueError):
-            time.sleep(0.2)
-    assert payload is not None, log.read_text(encoding="utf-8-sig") if log.exists() else "no log"
-    assert artifact.read_text() == "updated"
-    assert payload["status"] == "ok" and not payload["tasks_changed"]
-    assert payload["resources"]["skipped"] == ["agent-resources-not-registered"]
-    assert not (home / "tasks.yaml").exists()
+        time.sleep(0.1)
     output = os.getenv("NATIVE_EVIDENCE_DIR")
     if output:
         target = Path(output)
         target.mkdir(parents=True, exist_ok=True)
-        (target / f"upgrade-{sys.platform}.json").write_text(json.dumps(payload), encoding="utf-8")
+        (target / f"upgrade-{sys.platform}-{exit_code}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+    assert payload["state"] == ("failed" if exit_code else "completed"), (
+        json.dumps(payload),
+        Path(scheduled["log_path"]).read_text(encoding="utf-8"),
+    )
+    assert payload["package_stage"] == ("failed" if exit_code else "completed")
+    assert payload["resource_stage"] == ("skipped" if exit_code else "completed")
+    assert artifact.read_text() == "updated"
+    assert not (home / "tasks.yaml").exists()
+    assert not (home / "tickwork.db").exists()

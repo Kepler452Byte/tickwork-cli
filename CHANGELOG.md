@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Align agent_resources and system with the MVC template, retaining JSON argparse discovery and lazy SQLite. Registered resources follow packaged content; preserve Hint exterior bytes and user files, clean retired attachments and retain existing explicit locations.
+- Preview and confirm package upgrades, detect uv tool/pipx receipts, persist queryable operation stages, verify the new CLI and resource alignment, and preserve Windows background execution. Expose offline --skip-package alignment.
+- Add configurable per-task success/failure retention, previewed filtered cleanup with failure preservation and cascading logs, orphan reconciliation under run locks, and separate safe SQLite compaction.
+- Keep UTC timestamps and add UTC/local/IANA display_time to history/result, with cross-platform tzdata.
+
 ## 0.2.1
 
 - Run newly registered Windows scheduled tasks through the same environment's pythonw.exe, avoiding a console window for the runner.

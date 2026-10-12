@@ -1,4 +1,8 @@
-from datetime import UTC, datetime, timedelta
+import hashlib
+import json
+import sqlite3
+from contextlib import closing
+from datetime import UTC, datetime
 from typing import Any
 
 from tickwork_cli.common.application_errors import TickworkError
@@ -19,8 +23,6 @@ RUN_SCHEMA = """
     """
 
 LOG_LIMIT = 10 * 1024 * 1024
-RETENTION_DAYS = 30
-MAX_RUNS = 100
 
 
 class TaskRunRepository:
@@ -33,12 +35,6 @@ class TaskRunRepository:
             db.execute(
                 "UPDATE runs SET status='interrupted', finished=? WHERE task_id=? AND status='running'",
                 (datetime.now(UTC).isoformat(), task_id),
-            )
-            cutoff = (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat()
-            db.execute("DELETE FROM runs WHERE started < ?", (cutoff,))
-            db.execute(
-                "DELETE FROM runs WHERE id IN (SELECT id FROM runs WHERE finished IS NOT NULL ORDER BY started DESC LIMIT -1 OFFSET ?)",
-                (MAX_RUNS - 1,),
             )
             db.execute(
                 "INSERT INTO runs(id,task_id,started,status,pid) VALUES (?,?,?,?,?)",
@@ -83,3 +79,73 @@ class TaskRunRepository:
                 (run_id, after, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def completed(self) -> list[dict[str, Any]]:
+        if not self.database.path.exists():
+            return []
+        with self.database.transaction() as db:
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM runs WHERE finished IS NOT NULL AND status != 'running' ORDER BY finished DESC, id DESC"
+                )
+            ]
+
+    def delete_completed(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+        with self.database.transaction() as db:
+            # Count runs, not cascading log deletions.
+            count = sum(
+                db.execute(
+                    "DELETE FROM runs WHERE id=? AND finished IS NOT NULL AND status != 'running'",
+                    (run,),
+                ).rowcount
+                for run in ids
+            )
+            return count
+
+    def running_tasks(self) -> list[str]:
+        if not self.database.path.exists():
+            return []
+        with self.database.transaction() as db:
+            return [
+                row[0]
+                for row in db.execute("SELECT DISTINCT task_id FROM runs WHERE status='running'")
+            ]
+
+    def reconcile(self, task_id: str) -> int:
+        with self.database.transaction() as db:
+            return db.execute(
+                "UPDATE runs SET status='interrupted', finished=? WHERE task_id=? AND status='running'",
+                (datetime.now(UTC).isoformat(), task_id),
+            ).rowcount
+
+    def compaction_state(self) -> str:
+        if not self.database.path.exists():
+            return "missing"
+        signature = hashlib.sha256()
+        with self.database.transaction() as db:
+            # WAL/SHM file metadata changes just by opening a new CLI process.
+            # Hash logical content and allocated pages instead, streaming bounded log chunks.
+            signature.update(
+                json.dumps(
+                    [
+                        db.execute("PRAGMA page_count").fetchone()[0],
+                        db.execute("PRAGMA freelist_count").fetchone()[0],
+                    ]
+                ).encode()
+            )
+            for table, key in (("runs", "id"), ("logs", "seq")):
+                signature.update(table.encode())
+                for row in db.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+                    content = json.dumps(list(row), ensure_ascii=False).encode()
+                    signature.update(str(len(content)).encode() + b":" + content)
+        return signature.hexdigest()
+
+    def compact(self) -> None:
+        self.database.close()
+        with closing(sqlite3.connect(self.database.path, timeout=15)) as db:
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            db.execute("VACUUM")
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

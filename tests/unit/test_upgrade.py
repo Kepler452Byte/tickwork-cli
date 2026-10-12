@@ -1,141 +1,310 @@
 import json
-import subprocess
+import os
 import sys
-from pathlib import Path
 
 import pytest
 
-from tickwork_cli.app.agent.service.agent_resource_service import AgentResourceService
-from tickwork_cli.app.upgrade.service.upgrade_service import UpgradeService
-from tickwork_cli.common import package_update
-from tickwork_cli.common.application_errors import TickworkError
+from tickwork_cli.app.system.service.upgrade_service import UpgradeService
+from tickwork_cli.common import package_update_worker
+from tickwork_cli.common.operation_error import OperationError
+from tickwork_cli.common.package_updater import PackageUpdater
 
 
-def test_upgrade_aligns_registered_resources_without_touching_tasks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    agents = tmp_path / "AGENTS.md"
-    skills = tmp_path / "skills"
-    agents.write_text("User-owned instructions\n", encoding="utf-8")
-    resources = AgentResourceService(tmp_path)
-    preview = resources.install(agents, skills, False, None)
-    assert not (tmp_path / "local.yaml").exists()
-    resources.install(agents, skills, True, preview["plan"])
-    # Installed destinations are unique even after repeated alignment.
-    preview = resources.install(agents, skills, False, None)
-    resources.install(agents, skills, True, preview["plan"])
-    before = (tmp_path / "local.yaml").read_bytes()
-    tasks = tmp_path / "tasks.yaml"
-    tasks.write_text("tasks: []\n# User-owned state\n", encoding="utf-8")
-    tasks_before = tasks.read_bytes()
-    monkeypatch.setattr(package_update, "latest_version", lambda: None)
-    monkeypatch.setattr(package_update, "update_command", lambda: ("editable", None))
-    result = UpgradeService(tmp_path, resources).upgrade()
-    assert result["package"]["action"] == "skipped"
-    assert len(result["resources"]["targets"]) == 1
-    assert agents.read_text(encoding="utf-8").startswith("User-owned instructions\n")
-    assert before == (tmp_path / "local.yaml").read_bytes()
-    assert tasks_before == tasks.read_bytes()
-    assert not (tmp_path / "tickwork.db").exists()
-    (skills / "tickwork-task-management/SKILL.md").write_text("User edit", encoding="utf-8")
-    with pytest.raises(TickworkError, match="locally edited"):
-        UpgradeService(tmp_path, resources).upgrade(skip_package=True)
+class FakeResources:
+    def list_skills(self):
+        return {}
+
+    def show(self, name, relative="SKILL.md"):
+        return {}
+
+    def check(self):
+        return {}
+
+    def sync(self, confirm=False, expected_plan=None, skills_dir=None, hint_file=None):
+        return {
+            "version": "1.0",
+            "expected_plan": "resources-plan",
+            "conflicts": [],
+            "operations": [],
+            "write_performed": False,
+        }
 
 
-def test_upgrade_defers_resources_until_updated_package(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(package_update, "latest_version", lambda: "9.0.0")
-    command = ["uv", "tool", "upgrade", "tickwork-cli"]
-    monkeypatch.setattr(package_update, "update_command", lambda: ("uv-tool", command))
-    observed = []
+class FakeUpdater:
+    def __init__(self):
+        self.started = False
+
+    def plan(self):
+        return {"supported": True, "current_version": "1.0"}
+
+    def start(self, plan, expected_plan):
+        self.started = True
+        return {"state": "scheduled"}
+
+    def status(self, operation_id):
+        return {"state": "scheduled"}
+
+
+def test_upgrade_requires_unchanged_preview_and_returns_scheduled():
+    updater = FakeUpdater()
+    service = UpgradeService(FakeResources(), updater)
+    preview = service.upgrade()
+    with pytest.raises(OperationError, match="plan"):
+        service.upgrade(confirm=True, expected_plan="wrong")
+    assert not updater.started
+    assert (
+        service.upgrade(confirm=True, expected_plan=preview["expected_plan"])["state"]
+        == "scheduled"
+    )
+    assert updater.started
+
+
+def test_install_channel_detection_and_unknown_does_not_guess_pip(tmp_path, monkeypatch):
+    updater = PackageUpdater("tickwork-cli", "tickwork", tmp_path / "state")
+
+    class Distribution:
+        version = "1.0"
+
+        def read_text(self, name):
+            return None
+
+    from tickwork_cli.common import package_updater
+
+    monkeypatch.setattr(package_updater.metadata, "distribution", lambda name: Distribution())
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "ordinary-venv"))
+    plan = updater.plan()
+    assert plan["manager"] == "unknown"
+    assert plan["update_command"] == []
+    assert not plan["supported"]
+    for manager, segments in [
+        ("uv-tool", ["uv", "tools", "product"]),
+        ("pipx", ["pipx", "venvs", "product"]),
+    ]:
+        prefix = tmp_path.joinpath(*segments)
+        command = (
+            prefix
+            / ("Scripts" if os.name == "nt" else "bin")
+            / ("tickwork.exe" if os.name == "nt" else "tickwork")
+        )
+        command.parent.mkdir(parents=True)
+        command.touch()
+        if manager == "uv-tool":
+            (prefix / "uv-receipt.toml").write_text(
+                '[tool]\nrequirements = [{ name = "tickwork-cli" }]\n', encoding="utf-8"
+            )
+        else:
+            (prefix / "pipx_metadata.json").write_text(
+                json.dumps({"main_package": {"package": "tickwork-cli"}}),
+                encoding="utf-8",
+            )
+        monkeypatch.setattr(sys, "prefix", str(prefix))
+        monkeypatch.setattr(package_updater.shutil, "which", lambda name: str(tmp_path / name))
+        plan = updater.plan()
+        assert plan["manager"] == manager
+        assert plan["supported"]
+        assert plan["update_command"][-1] == ("tickwork-cli" if manager == "uv-tool" else "product")
+
+
+def make_job(tmp_path, exit_code=0):
+    folder = tmp_path / "path with spaces"
+    folder.mkdir()
+    path = folder / "result.json"
+    job = {
+        "operation_id": "a" * 32,
+        "state": "scheduled",
+        "package_stage": "pending",
+        "resource_stage": "pending",
+        "package": "tickwork-cli",
+        "current_version": "1.0",
+        "update_command": [sys.executable, "-c", f"raise SystemExit({exit_code})"],
+        "entry_point": "new-cli",
+        "host_pid": os.getpid(),
+        "home": str(tmp_path),
+    }
+    path.write_text(json.dumps(job), encoding="utf-8")
+    return path
+
+
+def test_failed_package_update_never_runs_resource_alignment(tmp_path, monkeypatch):
+    path = make_job(tmp_path, 1)
     monkeypatch.setattr(
-        package_update,
-        "spawn_update",
-        lambda update, home: observed.append((update, home)) or home / "upgrade.log",
+        package_update_worker, "invoke", lambda argv: pytest.fail("Resource command must not run")
     )
-    resources = AgentResourceService(tmp_path)
-    monkeypatch.setattr(
-        resources, "align", lambda: pytest.fail("Resources must be aligned by the new package")
-    )
-    result = UpgradeService(tmp_path, resources).upgrade()
-    assert result["resources"] == "deferred"
-    assert result["package"]["action"] == "updater-spawned"
-    assert observed == [(command, tmp_path)]
-    assert not result["tasks_changed"]
+    package_update_worker.run(path, wait=False)
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["state"] == "failed"
+    assert result["package_stage"] == "failed"
+    assert result["resource_stage"] == "skipped"
 
 
-def test_skip_package_is_hidden_and_does_not_query_pypi(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        package_update,
-        "latest_version",
-        lambda: pytest.fail("Internal alignment must not query PyPI"),
-    )
-    result = UpgradeService(tmp_path, AgentResourceService(tmp_path)).upgrade(True)
-    assert result["resources"]["skipped"] == ["agent-resources-not-registered"]
-    response = subprocess.run(
-        [sys.executable, "-m", "tickwork_cli.main", "upgrade", "--help"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "skip-package" not in response.stdout
-    assert json.loads(response.stdout)["status"] == "ok"
+def test_resource_failure_is_distinct_from_verified_package(tmp_path, monkeypatch):
+    path = make_job(tmp_path)
+
+    def invoke(argv):
+        if "--version" in argv:
+            return {"package": "tickwork-cli", "version": "1.1"}
+        raise RuntimeError("Conflict")
+
+    monkeypatch.setattr(package_update_worker, "invoke", invoke)
+    package_update_worker.run(path, wait=False)
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["state"] == "failed"
+    assert result["package_stage"] == "completed"
+    assert result["resource_stage"] == "failed"
 
 
-def test_shell_updater_quotes_paths_and_waits_for_parent(tmp_path: Path) -> None:
-    if sys.platform == "win32":
-        pytest.skip("POSIX shell test")
-    artifact = tmp_path / "artifact ' 中文 $name.json"
-    update = [
-        sys.executable,
-        "-c",
-        "import sys;from pathlib import Path;Path(sys.argv[1]).write_text('updated')",
-        str(artifact),
-    ]
-    align = [
-        sys.executable,
-        "-c",
-        "import sys;from pathlib import Path;p=Path(sys.argv[1]);p.write_text(p.read_text()+' aligned')",
-        str(artifact),
-    ]
-    script = package_update.updater_script(update, align, 99999999, False)
-    subprocess.run(["/bin/sh", "-c", script], check=True, timeout=15)
-    assert artifact.read_text() == "updated aligned"
-    windows = package_update.updater_script(
-        ["tool ' 中文", "arg ' $x"], ["tickwork", "upgrade"], 123, True
-    )
-    assert "Get-Process -Id 123" in windows
-    assert "'tool '' 中文'" in windows and "if ($LASTEXITCODE -eq 0)" in windows
+def test_success_requires_post_alignment_verification(tmp_path, monkeypatch):
+    path = make_job(tmp_path)
+
+    def invoke(argv):
+        if "--version" in argv:
+            return {"package": "tickwork-cli", "version": "1.1"}
+        return {
+            "package": "tickwork-cli",
+            "version": "1.1",
+            "expected_plan": "plan",
+            "operations": [],
+            "conflicts": [],
+        }
+
+    monkeypatch.setattr(package_update_worker, "invoke", invoke)
+    package_update_worker.run(path, wait=False)
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["state"] == "completed"
+    assert result["package_stage"] == result["resource_stage"] == "completed"
 
 
-def test_new_package_resources_replace_owned_copies_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import shutil
-    from importlib.resources import files
+def test_spawn_failure_is_a_durable_failure_and_stdout_is_clean(tmp_path, monkeypatch, capsys):
+    updater = PackageUpdater("tickwork-cli", "tickwork", tmp_path / "state")
+    from tickwork_cli.common import package_updater
 
-    from tickwork_cli.app.agent.service import agent_resource_service
+    def fail(*args, **kwargs):
+        raise OSError("Cannot spawn")
 
-    resources = AgentResourceService(tmp_path / "home")
-    agents = tmp_path / "AGENTS.md"
-    skills = tmp_path / "skills"
-    agents.write_text("Unrelated header\n", encoding="utf-8")
-    preview = resources.install(agents, skills, False, None)
-    resources.install(agents, skills, True, preview["plan"])
-    agents.write_text(agents.read_text(encoding="utf-8") + "Unrelated tail\n", encoding="utf-8")
-    package = tmp_path / "new-package"
-    shutil.copytree(str(files("tickwork_cli") / "resources"), package / "resources")
-    new_skill = package / "resources/skills/tickwork-task-management/SKILL.md"
-    new_skill.write_text(
-        new_skill.read_text(encoding="utf-8") + "\nNew packaged instructions\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(agent_resource_service, "files", lambda name: package)
-    result = UpgradeService(resources.home, resources).upgrade(True)
-    assert result["resources"]["targets"][0]["status"] == "ok"
-    assert (skills / "tickwork-task-management/SKILL.md").read_bytes() == new_skill.read_bytes()
-    assert agents.read_text(encoding="utf-8").startswith("Unrelated header\n")
-    assert agents.read_text(encoding="utf-8").endswith("Unrelated tail\n")
-    assert not (resources.home / "tasks.yaml").exists()
+    monkeypatch.setattr(package_updater.subprocess, "Popen", fail)
+    with pytest.raises(OperationError, match="Unable to start"):
+        updater.start(
+            {
+                "current_version": "1.0",
+                "update_command": ["uv", "tool", "upgrade", "tickwork-cli"],
+                "entry_point": "tickwork",
+            },
+            "plan",
+        )
+    assert capsys.readouterr().out == ""
+    operation = next((tmp_path / "state/upgrades").iterdir()).name
+    assert updater.status(operation)["state"] == "failed"
+
+
+def test_result_query_does_not_create_state_or_accept_path_traversal(tmp_path):
+    updater = PackageUpdater("tickwork-cli", "tickwork", tmp_path / "state")
+    with pytest.raises(OperationError, match="Invalid"):
+        updater.status("../../other")
+    with pytest.raises(OperationError, match="does not exist"):
+        updater.status("a" * 32)
+    assert not updater.state_root.exists()
+
+
+def test_new_cli_malformed_output_and_nonzero_exit_are_failures(tmp_path):
+    with pytest.raises(ValueError):
+        package_update_worker.invoke([sys.executable, "-c", "print('not json')"])
+    with pytest.raises(RuntimeError):
+        package_update_worker.invoke([sys.executable, "-c", "raise SystemExit(2)"])
+
+
+def test_post_alignment_pending_changes_are_failure(tmp_path, monkeypatch):
+    path = make_job(tmp_path)
+    count = 0
+
+    def invoke(argv):
+        nonlocal count
+        if "--version" in argv:
+            return {"version": "1.1"}
+        count += 1
+        return {
+            "package": "tickwork-cli",
+            "version": "1.1",
+            "expected_plan": "plan",
+            "operations": [{"action": "update"}] if count == 3 else [],
+            "conflicts": [],
+        }
+
+    monkeypatch.setattr(package_update_worker, "invoke", invoke)
+    package_update_worker.run(path, wait=False)
+    result = json.loads(path.read_text())
+    assert result["state"] == "failed"
+    assert result["package_stage"] == "completed" and result["resource_stage"] == "failed"
+
+
+def test_windows_job_replace_retries_reader_sharing_violation(tmp_path, monkeypatch):
+    path = tmp_path / "result.json"
+    path.write_text('{"state":"scheduled"}')
+    replace = package_update_worker.os.replace
+    attempts = 0
+
+    def sharing_violation(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            error = PermissionError("File is held by status reader")
+            error.winerror = 32
+            assert json.loads(path.read_text())["state"] == "scheduled"
+            raise error
+        replace(source, target)
+
+    monkeypatch.setattr(package_update_worker.sys, "platform", "win32")
+    monkeypatch.setattr(package_update_worker.os, "replace", sharing_violation)
+    monkeypatch.setattr(package_update_worker.time, "sleep", lambda seconds: None)
+    package_update_worker.save(path, {"state": "completed"})
+    assert attempts == 3
+    assert json.loads(path.read_text())["state"] == "completed"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_job_replace_does_not_hide_permanent_permission_failure(tmp_path, monkeypatch):
+    path = tmp_path / "result.json"
+    attempts = 0
+
+    def denied(source, target):
+        nonlocal attempts
+        attempts += 1
+        error = PermissionError("Denied")
+        error.winerror = 32
+        raise error
+
+    monkeypatch.setattr(package_update_worker.sys, "platform", "win32")
+    monkeypatch.setattr(package_update_worker.os, "replace", denied)
+    monkeypatch.setattr(package_update_worker.time, "sleep", lambda seconds: None)
+    with pytest.raises(PermissionError):
+        package_update_worker.save(path, {"state": "completed"})
+    assert attempts == 21
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file-sharing semantics")
+def test_windows_open_result_reader_does_not_fail_writer(tmp_path):
+    import threading
+    import time
+
+    path = tmp_path / "result.json"
+    path.write_text('{"state":"scheduled"}')
+    started = threading.Event()
+    failures = []
+
+    def write():
+        started.set()
+        try:
+            package_update_worker.save(path, {"state": "completed"})
+        except Exception as exc:
+            failures.append(exc)
+
+    with path.open("rb") as reader:
+        writer = threading.Thread(target=write)
+        writer.start()
+        assert started.wait(1)
+        time.sleep(0.1)
+        assert writer.is_alive()  # The OS denies replacement while the reader is open.
+        assert reader.read() == b'{"state":"scheduled"}'
+    writer.join(3)
+    assert not writer.is_alive() and not failures
+    assert json.loads(path.read_text())["state"] == "completed"

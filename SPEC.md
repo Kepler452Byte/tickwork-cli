@@ -10,7 +10,7 @@ Tickwork 是本机定时任务管理 CLI。公开命令为 `tickwork`，发行�
 - 三类时间规则：整分钟间隔（60..86400 秒）、每天时间、每周星期与时间；设备本地时区，原生 DST/休眠规则。无应用层补跑、自动重试或唤醒。
 - 新建默认暂停，更新保留暂停状态；写操作预览与实际摘要确认。原生启用状态由系统查询，不在 YAML/SQLite 双写。
 - `~/.tickwork/tasks.yaml` 是任务定义唯一事实源；`TICKWORK_HOME` 或 `--home` 覆盖目录。`tickwork.db` 保存可丢弃历史与日志；`.locks/` 是独立于数据库的 OS 运行锁。
-- SQLite 删除重建，无旧格式兼容和迁移链。删除前停止运行；历史日志不恢复。日志每次最多 10 MiB，分块写入、分页查询，截断显式报告。完成历史保留 30 天/100 条，启动新运行时清理。
+- SQLite 删除重建，无旧格式兼容和迁移链。删除前停止运行；历史日志不恢复。日志每次最多 10 MiB，分块写入、分页查询，截断显式报告。完成历史按每任务分类保留：成功 7 天/100 条，失败类 30 天/100 条且至少保留最近 10 条；数量上限优先，按完成时间计算滚动 24 小时。启动和完成运行时自动清理（本次返回的结果保留至下一次清理），显式清理默认预览并排除运行中记录。空间整理独立执行，禁止与任务运行并发。UTC 存储，查询可附带本地或指定时区时间。
 - 同任务不重叠；运行中修改/删除拒绝，避免平台卸载误杀进程。超时终止进程树。系统启动失败可能早于 SQLite 记录，须查原生日志。
 - 仅管理带匹配本机路径及任务标识的系统配置。不开 lingering，不保存 Windows 密码，不升级权限。
 
@@ -24,7 +24,7 @@ Agent CLI -> Agent resource service -> 托管 Hint/Skill 文件
 ```
 
 - CLI 不写业务规则，Service 不依赖 CLI 框架。标准库 argparse 负责参数发现，JSON Parser 负责单一输出契约；不保留第二套 Typer 文本输出。
-- `app/task` 放任务业务；`app/agent` 只管理随包资源。`common` 放实际共享机制；ApplicationSettings 与 ApplicationContainer 按 MVC 模板组织，容器注入 Repository、Scheduler 和 Service，以 initialize/close 管理数据库生命周期；数据库按需连接，避免无关命令产生 SQLite。
+- `app/task` 放任务业务；`app/agent_resources` 管理随包资源，`app/system` 管理版本与升级；资源 Repository 负责文件和登记，Service 负责归属与同步策略。`common` 放实际共享机制；ApplicationSettings 与 ApplicationContainer 按 MVC 模板组织，容器注入 Repository、Scheduler 和 Service，以 initialize/close 管理数据库生命周期；数据库按需连接，避免无关命令产生 SQLite。
 - 不预建 BaseService/BaseRepository、Mapper、事件总线、历史版本接口或空模块。
 - 公共帮助、无参数入口、版本、预览、成功和错误均为 UTF-8 JSON；stdout 成功/预览一个对象，stderr 错误一个对象及非零退出。日志/系统命令输出不得污染协议。
 - 配置变更有 OS 锁、当前配置/原生状态摘要、原生失败补偿；不声称跨 YAML 和系统调度器原子事务。进程在写入期间被强杀时，以实际配置和原生状态诊断修复。
@@ -32,8 +32,9 @@ Agent CLI -> Agent resource service -> 托管 Hint/Skill 文件
 
 ## 升级与后续动作
 
-- `tickwork upgrade` 更新受支持的 uv tool/pipx 包安装，再对齐 `local.yaml` 已登记的 Agent 资源。首次接入使用 agent install，不猜测旧安装位置。更新器等待当前 CLI 退出，输出写入本机 upgrade.log；启动更新器不能当成升级成功。
-- 升级不写任务定义或改变启停状态，不迁移旧格式。离线、源码或未知安装方式只对齐已登记资源并报告跳过原因。更新内部参数隐藏，不进入公共帮助。
+- `tickwork upgrade` 默认预览，确认当前摘要后更新受支持的 uv tool/pipx 包，再对齐 `local.yaml` 已登记资源。首次接入使用 agent install，不猜位置。已登记资源以包为准，保留 Hint 块外字节；旧受管附属文件清理，用户新增文件保留。现有登记和明确的 owned 文件记录接入同一登记契约，不建立版本迁移链。
+- 更新器位于被替换环境之外，等待 CLI 退出并持久化 operation_id 的包与资源阶段；agent upgrade-status 查询真实完成结果，包管理器原始输出不进入日志。Windows 更新链及子进程无控制台。
+- 升级不写任务定义或改变启停状态，不迁移旧格式。离线资源对齐使用公开 --skip-package；源码或未知渠道确认包更新时报错，不猜全局 pip。
 - 实际创建或修改执行参数后才返回测试 follow_up；执行后按真实 run_id 返回结果与日志入口，失败运行同样可诊断。follow_up 不自动执行，不沿用旧审批，创建不等于执行授权，测试不等于恢复调度。
 
 ## 验证与发布

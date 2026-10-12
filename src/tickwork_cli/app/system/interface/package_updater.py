@@ -1,0 +1,9 @@
+"""Package update execution port consumed by the upgrade use case."""
+
+from typing import Protocol
+
+
+class IPackageUpdater(Protocol):
+    def plan(self) -> dict[str, object]: ...
+    def start(self, plan: dict[str, object], expected_plan: str) -> dict[str, object]: ...
+    def status(self, operation_id: str) -> dict[str, object]: ...
