@@ -67,3 +67,31 @@ def test_skill_reference_and_hint_only_confirm_contract(tmp_path):
     assert synced["operations"] == []
     assert not (home / "tickwork.db").exists()
     assert not (home / "tasks.yaml").exists()
+
+
+def test_compaction_preview_survives_another_cli_process(tmp_path):
+    from tickwork_cli.application_container import ApplicationContainer
+    from tickwork_cli.application_settings import ApplicationSettings
+
+    home = tmp_path / "home"
+    container = ApplicationContainer(ApplicationSettings.load(home))
+    container.initialize()
+    runs = container.task_service.runs
+    runs.start("run", "example", 123)
+    runs.append("run", "stdout", "preserved")
+    runs.finish("run", "succeeded", 0, 1, False)
+    container.close()
+    preview = json.loads(call(home, "task", "compact").stdout)
+    assert json.loads(call(home, "task", "result", "run").stdout)["run"]["status"] == "succeeded"
+    result = call(home, "task", "compact", "--confirm", "--expected-plan", preview["plan"])
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["write_performed"]
+    assert (
+        json.loads(call(home, "task", "logs", "run").stdout)["chunks"][0]["content"] == "preserved"
+    )
+    preview = json.loads(call(home, "task", "compact").stdout)
+    runs.append("run", "stdout", "new write")
+    container.close()
+    result = call(home, "task", "compact", "--confirm", "--expected-plan", preview["plan"])
+    assert result.returncode != 0
+    assert json.loads(result.stderr)["code"] == "stale-plan"

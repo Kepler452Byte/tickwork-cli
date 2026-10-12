@@ -310,7 +310,7 @@ class TaskService:
                 str(file): {"size": file.stat().st_size, "modified": file.stat().st_mtime_ns}
                 for file in path.parent.glob("tickwork.db*")
             }
-            plan = hashlib.sha256(json.dumps(stats, sort_keys=True).encode()).hexdigest()
+            plan = self.runs.compaction_state()
             result = {
                 "status": "preview",
                 "plan": plan,

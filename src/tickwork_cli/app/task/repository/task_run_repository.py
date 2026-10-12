@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
@@ -118,6 +120,28 @@ class TaskRunRepository:
                 "UPDATE runs SET status='interrupted', finished=? WHERE task_id=? AND status='running'",
                 (datetime.now(UTC).isoformat(), task_id),
             ).rowcount
+
+    def compaction_state(self) -> str:
+        if not self.database.path.exists():
+            return "missing"
+        signature = hashlib.sha256()
+        with self.database.transaction() as db:
+            # WAL/SHM file metadata changes just by opening a new CLI process.
+            # Hash logical content and allocated pages instead, streaming bounded log chunks.
+            signature.update(
+                json.dumps(
+                    [
+                        db.execute("PRAGMA page_count").fetchone()[0],
+                        db.execute("PRAGMA freelist_count").fetchone()[0],
+                    ]
+                ).encode()
+            )
+            for table, key in (("runs", "id"), ("logs", "seq")):
+                signature.update(table.encode())
+                for row in db.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+                    content = json.dumps(list(row), ensure_ascii=False).encode()
+                    signature.update(str(len(content)).encode() + b":" + content)
+        return signature.hexdigest()
 
     def compact(self) -> None:
         self.database.close()
