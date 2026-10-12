@@ -43,12 +43,6 @@ assert not artifact.exists(), 'Updater ran before CLI exited'
         if payload["state"] in {"completed", "failed"}:
             break
         time.sleep(0.1)
-    assert payload["state"] == ("failed" if exit_code else "completed"), payload
-    assert payload["package_stage"] == ("failed" if exit_code else "completed")
-    assert payload["resource_stage"] == ("skipped" if exit_code else "completed")
-    assert artifact.read_text() == "updated"
-    assert not (home / "tasks.yaml").exists()
-    assert not (home / "tickwork.db").exists()
     output = os.getenv("NATIVE_EVIDENCE_DIR")
     if output:
         target = Path(output)
@@ -56,3 +50,12 @@ assert not artifact.exists(), 'Updater ran before CLI exited'
         (target / f"upgrade-{sys.platform}-{exit_code}.json").write_text(
             json.dumps(payload), encoding="utf-8"
         )
+    assert payload["state"] == ("failed" if exit_code else "completed"), (
+        json.dumps(payload),
+        Path(scheduled["log_path"]).read_text(encoding="utf-8"),
+    )
+    assert payload["package_stage"] == ("failed" if exit_code else "completed")
+    assert payload["resource_stage"] == ("skipped" if exit_code else "completed")
+    assert artifact.read_text() == "updated"
+    assert not (home / "tasks.yaml").exists()
+    assert not (home / "tickwork.db").exists()

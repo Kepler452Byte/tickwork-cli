@@ -285,6 +285,10 @@ class TaskService:
                 # Reconcile only after plan approval and under the execution lock.
                 reconciled = 0
                 for task in self.runs.running_tasks():
+                    if task_id is not None and task != task_id:
+                        continue
+                    if statuses is not None and "interrupted" not in statuses:
+                        continue
                     try:
                         with self.run_lock(task):
                             reconciled += self.runs.reconcile(task)

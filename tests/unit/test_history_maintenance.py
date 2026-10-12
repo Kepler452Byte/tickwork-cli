@@ -200,3 +200,17 @@ def test_automatic_count_cap_includes_new_completion(service, tmp_path):
     assert sum(row["status"] == "succeeded" for row in rows) == 2
     assert sum(row["status"] == "failed" for row in rows) == 2
     assert service.runs.result(result["id"])
+
+
+def test_filtered_cleanup_does_not_reconcile_unselected_orphans(service):
+    seed(service, "selected", task="selected", status="running")
+    seed(service, "other", task="other", status="running")
+    args = ("selected", None, ["succeeded"], False)
+    preview = service.cleanup(*args, False, None)
+    service.cleanup(*args, True, preview["plan"])
+    assert service.runs.result("selected")["status"] == "running"
+    args = ("selected", None, None, False)
+    preview = service.cleanup(*args, False, None)
+    service.cleanup(*args, True, preview["plan"])
+    assert service.runs.result("selected")["status"] == "interrupted"
+    assert service.runs.result("other")["status"] == "running"
